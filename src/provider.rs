@@ -5,6 +5,7 @@ use anyhow::{Context, anyhow};
 use regex::Regex;
 use reqwest::blocking::Client;
 
+use crate::APP_VERSION;
 use crate::model::{MtProtoProxy, ProviderConfig, ProxyRecord};
 
 #[derive(Debug)]
@@ -17,7 +18,7 @@ pub struct MtProtoProvider {
 impl MtProtoProvider {
     pub fn new(config: ProviderConfig) -> anyhow::Result<Self> {
         let client = Client::builder()
-            .user_agent("ProtoSwitch/0.1.0-beta.1")
+            .user_agent(format!("ProtoSwitch/{APP_VERSION}"))
             .timeout(Duration::from_secs(10))
             .build()
             .context("Не удалось создать HTTP-клиент")?;

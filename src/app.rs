@@ -8,7 +8,7 @@ use clap::Parser;
 use crate::cli::{
     AutostartCommand, Cli, Commands, DoctorArgs, InitArgs, StatusArgs, SwitchArgs, WatchArgs,
 };
-use crate::model::{AppConfig, AppState, InitOverrides, WatcherMode};
+use crate::model::{AppConfig, AppState, AutostartMethod, InitOverrides, WatcherMode};
 use crate::paths::AppPaths;
 use crate::provider::MtProtoProvider;
 use crate::telegram;
@@ -45,23 +45,24 @@ fn handle_init(paths: &AppPaths, args: InitArgs) -> anyhow::Result<()> {
         },
     });
 
-    let config = if args.non_interactive || !ui::stdout_is_terminal() {
+    let mut config = if args.non_interactive || !ui::stdout_is_terminal() {
         config
     } else {
         ui::run_setup(config)?
     };
-
-    config.save(&paths.config_file)?;
 
     if !paths.state_file.exists() {
         AppState::default().save(&paths.state_file)?;
     }
 
     if config.autostart.enabled {
-        windows::install_autostart(
+        let method = windows::install_autostart(
             &std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?,
         )?;
+        config.autostart.method = method;
     }
+
+    config.save(&paths.config_file)?;
 
     let telegram_info = telegram::detect_installation()?;
     paths.append_log("init completed")?;
@@ -84,6 +85,14 @@ fn handle_init(paths: &AppPaths, args: InitArgs) -> anyhow::Result<()> {
             .executable_path
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "не найден".to_string())
+    );
+    println!(
+        "Автозапуск: {}",
+        if config.autostart.enabled {
+            format!("вкл ({})", autostart_method_label(&config.autostart.method))
+        } else {
+            "выкл".to_string()
+        }
     );
 
     Ok(())
@@ -120,6 +129,7 @@ fn handle_watch(paths: &AppPaths, args: WatchArgs) -> anyhow::Result<()> {
 fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
     let config = AppConfig::load(paths)?;
     let state = AppState::load(paths)?;
+    let autostart = windows::query_autostart();
 
     if args.json {
         println!(
@@ -127,6 +137,7 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({
                 "config": config,
                 "state": state,
+                "autostart": autostart,
             }))
             .context("Не удалось сериализовать status")?
         );
@@ -134,10 +145,10 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
     }
 
     if !args.plain && ui::stdout_is_terminal() {
-        return ui::run_status(paths, &config, &state);
+        return ui::run_status(paths, &config, &state, &autostart);
     }
 
-    print_plain_status(paths, &config, &state);
+    print_plain_status(paths, &config, &state, &autostart);
     Ok(())
 }
 
@@ -176,6 +187,7 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     let config = AppConfig::load(paths)?;
     let provider = MtProtoProvider::new(config.provider.clone())?;
     let installation = telegram::detect_installation()?;
+    let autostart = windows::query_autostart();
     let provider_probe = provider
         .fetch_candidate(&[])
         .map(|record| record.proxy.short_label())
@@ -192,7 +204,7 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
         "tg_protocol_handler": installation.protocol_handler,
         "telegram_executable": installation.executable_path.map(|path| path.display().to_string()),
         "telegram_running": telegram::is_running().unwrap_or(false),
-        "autostart_installed": windows::query_autostart(),
+        "autostart": autostart,
         "provider_probe": provider_probe,
     });
 
@@ -228,8 +240,22 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     );
     println!(
         "Автозапуск: {}",
-        yes_no(report["autostart_installed"].as_bool().unwrap_or(false))
+        if autostart.installed {
+            format!(
+                "да ({})",
+                autostart
+                    .method
+                    .as_ref()
+                    .map(autostart_method_label)
+                    .unwrap_or("unknown")
+            )
+        } else {
+            "нет".to_string()
+        }
     );
+    if let Some(target) = autostart.target {
+        println!("Цель автозапуска: {target}");
+    }
     println!("mtproto.ru: {provider_probe_display}");
 
     Ok(())
@@ -240,16 +266,21 @@ fn handle_autostart(paths: &AppPaths, command: AutostartCommand) -> anyhow::Resu
 
     match command {
         AutostartCommand::Install => {
-            windows::install_autostart(
+            let method = windows::install_autostart(
                 &std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?,
             )?;
             config.autostart.enabled = true;
+            config.autostart.method = method.clone();
             config.save(&paths.config_file)?;
-            println!("Автозапуск включён.");
+            println!(
+                "Автозапуск включён через {}.",
+                autostart_method_label(&method)
+            );
         }
         AutostartCommand::Remove => {
             windows::remove_autostart()?;
             config.autostart.enabled = false;
+            config.autostart.method = AutostartMethod::ScheduledTask;
             config.save(&paths.config_file)?;
             println!("Автозапуск выключен.");
         }
@@ -365,7 +396,12 @@ fn watch_cycle(
     }
 }
 
-fn print_plain_status(paths: &AppPaths, config: &AppConfig, state: &AppState) {
+fn print_plain_status(
+    paths: &AppPaths,
+    config: &AppConfig,
+    state: &AppState,
+    autostart: &windows::AutostartStatus,
+) {
     println!("ProtoSwitch {}", APP_VERSION);
     println!("Источник: {}", config.provider.source_url);
     println!(
@@ -414,6 +450,29 @@ fn print_plain_status(paths: &AppPaths, config: &AppConfig, state: &AppState) {
             .map(format_local_time)
             .unwrap_or_else(|| "нет данных".to_string())
     );
+    println!(
+        "Автозапуск: {}",
+        if autostart.installed {
+            format!(
+                "да ({})",
+                autostart
+                    .method
+                    .as_ref()
+                    .map(autostart_method_label)
+                    .unwrap_or("unknown")
+            )
+        } else if config.autostart.enabled {
+            format!(
+                "ожидается ({})",
+                autostart_method_label(&config.autostart.method)
+            )
+        } else {
+            "нет".to_string()
+        }
+    );
+    if let Some(target) = &autostart.target {
+        println!("Цель автозапуска: {target}");
+    }
     println!("config.toml: {}", paths.config_file.display());
     println!("state.json: {}", paths.state_file.display());
     println!("watch.log: {}", paths.log_file.display());
@@ -436,6 +495,13 @@ fn watcher_mode(mode: &WatcherMode) -> &'static str {
         WatcherMode::WaitingForTelegram => "waiting_for_telegram",
         WatcherMode::Switching => "switching",
         WatcherMode::Error => "error",
+    }
+}
+
+fn autostart_method_label(method: &AutostartMethod) -> &'static str {
+    match method {
+        AutostartMethod::ScheduledTask => "scheduled_task",
+        AutostartMethod::StartupFolder => "startup_folder",
     }
 }
 

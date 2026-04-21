@@ -15,8 +15,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
 use crate::APP_VERSION;
-use crate::model::{AppConfig, AppState, WatcherMode};
+use crate::model::{AppConfig, AppState, AutostartMethod, WatcherMode};
 use crate::paths::AppPaths;
+use crate::windows::AutostartStatus;
 
 pub fn stdout_is_terminal() -> bool {
     io::stdout().is_terminal()
@@ -103,7 +104,12 @@ pub fn run_setup(config: AppConfig) -> anyhow::Result<AppConfig> {
     }
 }
 
-pub fn run_status(paths: &AppPaths, config: &AppConfig, state: &AppState) -> anyhow::Result<()> {
+pub fn run_status(
+    paths: &AppPaths,
+    config: &AppConfig,
+    state: &AppState,
+    autostart: &AutostartStatus,
+) -> anyhow::Result<()> {
     let mut session = TerminalSession::new()?;
 
     loop {
@@ -199,18 +205,35 @@ pub fn run_status(paths: &AppPaths, config: &AppConfig, state: &AppState) -> any
             .block(Block::default().borders(Borders::ALL).title("Тайминг"));
             frame.render_widget(timing_panel, middle[0]);
 
+            let autostart_text = if autostart.installed {
+                format!(
+                    "Автозапуск: да ({})",
+                    autostart
+                        .method
+                        .as_ref()
+                        .map(autostart_method_label)
+                        .unwrap_or("unknown")
+                )
+            } else if config.autostart.enabled {
+                format!(
+                    "Автозапуск: ожидание ({})",
+                    autostart_method_label(&config.autostart.method)
+                )
+            } else {
+                "Автозапуск: нет".to_string()
+            };
+
             let paths_panel = Paragraph::new(vec![
                 Line::from(paths.config_file.display().to_string()),
                 Line::from(paths.state_file.display().to_string()),
                 Line::from(paths.log_file.display().to_string()),
-                Line::from(format!(
-                    "Автозапуск: {}",
-                    if config.autostart.enabled {
-                        "вкл"
-                    } else {
-                        "выкл"
-                    }
-                )),
+                Line::from(autostart_text),
+                Line::from(
+                    autostart
+                        .target
+                        .clone()
+                        .unwrap_or_else(|| "Цель автозапуска: нет".to_string()),
+                ),
             ])
             .block(Block::default().borders(Borders::ALL).title("Файлы"));
             frame.render_widget(paths_panel, middle[1]);
@@ -279,6 +302,13 @@ fn mode_label(mode: &WatcherMode) -> &'static str {
         WatcherMode::WaitingForTelegram => "waiting_for_telegram",
         WatcherMode::Switching => "switching",
         WatcherMode::Error => "error",
+    }
+}
+
+fn autostart_method_label(method: &AutostartMethod) -> &'static str {
+    match method {
+        AutostartMethod::ScheduledTask => "scheduled_task",
+        AutostartMethod::StartupFolder => "startup_folder",
     }
 }
 

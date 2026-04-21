@@ -47,6 +47,7 @@ impl fmt::Display for MtProtoProxy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub app_version: String,
     pub provider: ProviderConfig,
@@ -106,6 +107,7 @@ impl AppConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProviderConfig {
     pub source_url: String,
     pub fetch_attempts: usize,
@@ -121,6 +123,7 @@ impl Default for ProviderConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WatcherConfig {
     pub check_interval_secs: u64,
     pub connect_timeout_secs: u64,
@@ -139,18 +142,32 @@ impl Default for WatcherConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutostartMethod {
+    #[default]
+    ScheduledTask,
+    StartupFolder,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AutostartConfig {
     pub enabled: bool,
+    pub method: AutostartMethod,
 }
 
 impl Default for AutostartConfig {
     fn default() -> Self {
-        Self { enabled: false }
+        Self {
+            enabled: false,
+            method: AutostartMethod::ScheduledTask,
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct AppState {
     pub current_proxy: Option<ProxyRecord>,
     pub pending_proxy: Option<ProxyRecord>,
@@ -235,6 +252,7 @@ impl ProxyRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WatcherSnapshot {
     pub mode: WatcherMode,
     pub failure_streak: u32,
@@ -320,10 +338,15 @@ mod tests {
 
         let mut config = AppConfig::default();
         config.autostart.enabled = true;
+        config.autostart.method = AutostartMethod::StartupFolder;
         config.save(&paths.config_file).unwrap();
 
         let loaded_config = AppConfig::load(&paths).unwrap();
         assert!(loaded_config.autostart.enabled);
+        assert_eq!(
+            loaded_config.autostart.method,
+            AutostartMethod::StartupFolder
+        );
 
         let mut state = AppState::default();
         state.mark_failure();
