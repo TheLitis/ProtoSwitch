@@ -1,6 +1,6 @@
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
@@ -34,10 +34,10 @@ pub fn check_proxy(proxy: &MtProtoProxy, timeout_secs: u64) -> bool {
 
 #[cfg(windows)]
 pub fn open_proxy_link(proxy: &MtProtoProxy) -> anyhow::Result<()> {
-    let status = run_hidden_powershell(&apply_proxy_command(&proxy.deep_link()))
+    let output = run_hidden_powershell_output(&apply_proxy_command(&proxy.deep_link()))
         .context("Не удалось вызвать PowerShell для tg://proxy")?;
 
-    if !status.success() {
+    if !output.status.success() {
         return Err(anyhow!(
             "Не удалось автоматически подтвердить окно Telegram для tg://proxy"
         ));
@@ -48,6 +48,40 @@ pub fn open_proxy_link(proxy: &MtProtoProxy) -> anyhow::Result<()> {
 
 #[cfg(not(windows))]
 pub fn open_proxy_link(_proxy: &MtProtoProxy) -> anyhow::Result<()> {
+    Err(anyhow!("Поддерживается только Windows"))
+}
+
+#[cfg(windows)]
+pub fn remove_proxies(proxies: &[MtProtoProxy]) -> anyhow::Result<usize> {
+    if proxies.is_empty() {
+        return Ok(0);
+    }
+
+    let output = run_hidden_powershell_output(&cleanup_proxies_command(proxies))
+        .context("Не удалось вызвать PowerShell для очистки proxy в Telegram")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Не удалось удалить мёртвые proxy из списка Telegram"
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok(0);
+    }
+
+    stdout
+        .lines()
+        .last()
+        .unwrap_or("0")
+        .trim()
+        .parse::<usize>()
+        .context("Не удалось разобрать результат очистки Telegram proxy list")
+}
+
+#[cfg(not(windows))]
+pub fn remove_proxies(_proxies: &[MtProtoProxy]) -> anyhow::Result<usize> {
     Err(anyhow!("Поддерживается только Windows"))
 }
 
@@ -134,7 +168,7 @@ fn common_telegram_paths() -> Vec<PathBuf> {
 }
 
 #[cfg(windows)]
-fn run_hidden_powershell(script: &str) -> anyhow::Result<std::process::ExitStatus> {
+fn run_hidden_powershell_output(script: &str) -> anyhow::Result<Output> {
     Command::new("powershell")
         .args([
             "-NoProfile",
@@ -145,18 +179,44 @@ fn run_hidden_powershell(script: &str) -> anyhow::Result<std::process::ExitStatu
             "-Command",
             script,
         ])
-        .status()
+        .output()
         .context("Не удалось запустить PowerShell")
 }
 
 #[cfg(windows)]
 fn apply_proxy_command(value: &str) -> String {
-    let link = value.replace('\'', "''");
+    let link = ps_literal(value);
     format!(
-        r#"$ErrorActionPreference = 'SilentlyContinue'
-Start-Process '{link}'
+        r#"$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-$deadline = [DateTime]::UtcNow.AddMilliseconds(5000)
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ProtoSwitchNative {{
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+}}
+"@
+function Invoke-Element($element) {{
+  $pattern = $null
+  if ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {{
+    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    return $true
+  }}
+  return $false
+}}
+function Restore-PreviousWindow($handle) {{
+  if ($handle -eq [IntPtr]::Zero) {{
+    return
+  }}
+  Start-Sleep -Milliseconds 150
+  [ProtoSwitchNative]::ShowWindowAsync($handle, 9) | Out-Null
+  [ProtoSwitchNative]::SetForegroundWindow($handle) | Out-Null
+}}
+$previous = [ProtoSwitchNative]::GetForegroundWindow()
+Start-Process {link}
+$deadline = [DateTime]::UtcNow.AddMilliseconds(6000)
 while ([DateTime]::UtcNow -lt $deadline) {{
   $proc = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {{
@@ -169,23 +229,11 @@ while ([DateTime]::UtcNow -lt $deadline) {{
     [System.Windows.Automation.AutomationElement]::ClassNameProperty,
     'class Ui::GenericBox'
   )
-  $textCond = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::Text
-  )
-  $box = $null
   $boxes = $main.FindAll($scope, $boxCond)
+  $box = $null
   for ($i = 0; $i -lt $boxes.Count; $i++) {{
     $candidate = $boxes.Item($i)
-    if ($candidate.Current.IsOffscreen) {{
-      continue
-    }}
-    $texts = $candidate.FindAll($scope, $textCond)
-    $blob = ''
-    for ($j = 0; $j -lt $texts.Count; $j++) {{
-      $blob += ' ' + $texts.Item($j).Current.Name
-    }}
-    if ($blob -match 'Proxy|Прокси|Server|Сервер|Secret|Секрет|Port|Порт') {{
+    if (-not $candidate.Current.IsOffscreen) {{
       $box = $candidate
       break
     }}
@@ -194,37 +242,298 @@ while ([DateTime]::UtcNow -lt $deadline) {{
     Start-Sleep -Milliseconds 150
     continue
   }}
-  $layer = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($box)
-  if ($null -eq $layer) {{
-    Start-Sleep -Milliseconds 150
-    continue
-  }}
   $buttonCond = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::ClassNameProperty,
     'class Ui::RoundButton'
   )
-  $button = $null
-  $buttons = $layer.FindAll($scope, $buttonCond)
+  $buttons = $main.FindAll($scope, $buttonCond)
+  $primary = $null
   for ($i = 0; $i -lt $buttons.Count; $i++) {{
     $candidate = $buttons.Item($i)
-    if (-not $candidate.Current.IsOffscreen -and $candidate.Current.IsEnabled) {{
-      $button = $candidate
+    if ($candidate.Current.IsOffscreen -or -not $candidate.Current.IsEnabled) {{
+      continue
+    }}
+    if ($null -eq $primary) {{
+      $primary = $candidate
+    }}
+    $name = $candidate.Current.Name
+    if ($name -match 'Connect|Подключ|Use|Использ') {{
+      $primary = $candidate
       break
     }}
   }}
-  if ($null -eq $button) {{
+  if ($null -eq $primary) {{
     Start-Sleep -Milliseconds 150
     continue
   }}
-  $pattern = $null
-  if ($button.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {{
-    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+  if (Invoke-Element $primary) {{
+    Restore-PreviousWindow $previous
     exit 0
   }}
   Start-Sleep -Milliseconds 150
 }}
+Restore-PreviousWindow $previous
 exit 1"#
     )
+}
+
+#[cfg(windows)]
+fn cleanup_proxies_command(proxies: &[MtProtoProxy]) -> String {
+    let payload = serde_json::to_string(proxies).unwrap_or_else(|_| "[]".to_string());
+    let payload = ps_literal(&payload);
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ProtoSwitchNative {{
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+}}
+"@
+function Invoke-Element($element) {{
+  $pattern = $null
+  if ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {{
+    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    return $true
+  }}
+  return $false
+}}
+function Restore-PreviousWindow($handle) {{
+  if ($handle -eq [IntPtr]::Zero) {{
+    return
+  }}
+  Start-Sleep -Milliseconds 150
+  [ProtoSwitchNative]::ShowWindowAsync($handle, 9) | Out-Null
+  [ProtoSwitchNative]::SetForegroundWindow($handle) | Out-Null
+}}
+function Get-MainWindow() {{
+  $proc = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {{
+    return $null
+  }}
+  [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$proc.MainWindowHandle)
+}}
+function Wait-ForClass($className, $timeoutMs) {{
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+  while ([DateTime]::UtcNow -lt $deadline) {{
+    $main = Get-MainWindow
+    if ($null -eq $main) {{
+      Start-Sleep -Milliseconds 150
+      continue
+    }}
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+      $className
+    )
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+    $items = $main.FindAll($scope, $cond)
+    for ($i = 0; $i -lt $items.Count; $i++) {{
+      $candidate = $items.Item($i)
+      if (-not $candidate.Current.IsOffscreen) {{
+        return [PSCustomObject]@{{ Main = $main; Element = $candidate }}
+      }}
+    }}
+    Start-Sleep -Milliseconds 150
+  }}
+  return $null
+}}
+function Get-VisibleProxyRows($main) {{
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class `anonymous namespace''::ProxyRow'
+  )
+  $rows = $main.FindAll($scope, $cond)
+  $result = @()
+  for ($i = 0; $i -lt $rows.Count; $i++) {{
+    $row = $rows.Item($i)
+    if ($row.Current.IsOffscreen) {{
+      continue
+    }}
+    $result += [PSCustomObject]@{{
+      Element = $row
+      Y = [int]$row.Current.BoundingRectangle.Y
+    }}
+  }}
+  $result | Sort-Object Y
+}}
+function Get-RowMenuButton($main, $rowY) {{
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::IconButton'
+  )
+  $buttons = $main.FindAll($scope, $cond)
+  $target = $null
+  $bestDistance = 99999
+  for ($i = 0; $i -lt $buttons.Count; $i++) {{
+    $button = $buttons.Item($i)
+    if ($button.Current.IsOffscreen) {{
+      continue
+    }}
+    $distance = [math]::Abs([int]$button.Current.BoundingRectangle.Y - [int]$rowY)
+    if ($distance -le 8 -and $distance -lt $bestDistance) {{
+      $target = $button
+      $bestDistance = $distance
+    }}
+  }}
+  $target
+}}
+function Get-MenuItemByNames($main, $names) {{
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::MenuItem
+  )
+  $items = $main.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $items.Count; $i++) {{
+    $item = $items.Item($i)
+    if ($item.Current.IsOffscreen) {{
+      continue
+    }}
+    foreach ($name in $names) {{
+      if ($item.Current.Name -eq $name) {{
+        return $item
+      }}
+    }}
+  }}
+  return $null
+}}
+function Get-EditorValue($editor, $names) {{
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Edit
+  )
+  $items = $editor.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $items.Count; $i++) {{
+    $item = $items.Item($i)
+    foreach ($name in $names) {{
+      if ($item.Current.Name -eq $name) {{
+        $pattern = $null
+        if ($item.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {{
+          return ([System.Windows.Automation.ValuePattern]$pattern).Current.Value
+        }}
+      }}
+    }}
+  }}
+  return ''
+}}
+function Close-Editor($main) {{
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::RoundButton'
+  )
+  $buttons = $main.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $buttons.Count; $i++) {{
+    $button = $buttons.Item($i)
+    if ($button.Current.IsOffscreen) {{
+      continue
+    }}
+    if ($button.Current.Name -match 'Cancel|Отмена') {{
+      Invoke-Element $button | Out-Null
+      Start-Sleep -Milliseconds 200
+      return
+    }}
+  }}
+}}
+$targets = ConvertFrom-Json {payload}
+if ($null -eq $targets -or $targets.Count -eq 0) {{
+  Write-Output 0
+  exit 0
+}}
+$previous = [ProtoSwitchNative]::GetForegroundWindow()
+Start-Process 'tg://settings/data_and_storage/proxy/settings'
+$box = Wait-ForClass 'class `anonymous namespace''::ProxiesBox' 6000
+if ($null -eq $box) {{
+  Restore-PreviousWindow $previous
+  exit 1
+}}
+$remaining = @{{}}
+foreach ($target in $targets) {{
+  $key = ('{{0}}:{{1}}:{{2}}' -f $target.server, $target.port, $target.secret).ToLowerInvariant()
+  $remaining[$key] = $true
+}}
+$removed = 0
+for ($pass = 0; $pass -lt 12 -and $remaining.Count -gt 0; $pass++) {{
+  $main = Get-MainWindow
+  if ($null -eq $main) {{
+    break
+  }}
+  $rows = Get-VisibleProxyRows $main
+  $deleted = $false
+  foreach ($row in $rows) {{
+    $main = Get-MainWindow
+    if ($null -eq $main) {{
+      break
+    }}
+    $menu = Get-RowMenuButton $main $row.Y
+    if ($null -eq $menu) {{
+      continue
+    }}
+    if (-not (Invoke-Element $menu)) {{
+      continue
+    }}
+    Start-Sleep -Milliseconds 200
+    $edit = Get-MenuItemByNames $main @('Edit', 'Редактировать')
+    if ($null -eq $edit) {{
+      continue
+    }}
+    if (-not (Invoke-Element $edit)) {{
+      continue
+    }}
+    Start-Sleep -Milliseconds 250
+    $editor = Wait-ForClass 'class `anonymous namespace''::ProxyBox' 2000
+    if ($null -eq $editor) {{
+      continue
+    }}
+    $server = Get-EditorValue $editor.Element @('Hostname', 'Host', 'Server', 'Сервер')
+    $port = Get-EditorValue $editor.Element @('Port')
+    $secret = Get-EditorValue $editor.Element @('Secret', 'Секрет')
+    Close-Editor $editor.Main
+    if ([string]::IsNullOrWhiteSpace($server) -or [string]::IsNullOrWhiteSpace($port) -or [string]::IsNullOrWhiteSpace($secret)) {{
+      continue
+    }}
+    $key = ('{{0}}:{{1}}:{{2}}' -f $server, $port, $secret).ToLowerInvariant()
+    if (-not $remaining.ContainsKey($key)) {{
+      continue
+    }}
+    $main = Get-MainWindow
+    if ($null -eq $main) {{
+      break
+    }}
+    $menu = Get-RowMenuButton $main $row.Y
+    if ($null -eq $menu -or -not (Invoke-Element $menu)) {{
+      continue
+    }}
+    Start-Sleep -Milliseconds 200
+    $delete = Get-MenuItemByNames $main @('Delete', 'Удалить')
+    if ($null -eq $delete -or -not (Invoke-Element $delete)) {{
+      continue
+    }}
+    $remaining.Remove($key) | Out-Null
+    $removed++
+    $deleted = $true
+    Start-Sleep -Milliseconds 250
+    break
+  }}
+  if (-not $deleted) {{
+    break
+  }}
+}}
+Restore-PreviousWindow $previous
+Write-Output $removed
+exit 0"#
+    )
+}
+
+#[cfg(windows)]
+fn ps_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[derive(Debug, Clone)]
@@ -242,9 +551,21 @@ mod tests {
     fn formats_powershell_command_for_tg_link() {
         let value = apply_proxy_command("tg://proxy?server=test&port=443&secret=abcd");
         assert!(value.contains("Start-Process 'tg://proxy?server=test&port=443&secret=abcd'"));
-        assert!(value.contains("UIAutomationClient"));
+        assert!(value.contains("GetForegroundWindow"));
         assert!(value.contains("class Ui::GenericBox"));
         assert!(value.contains("class Ui::RoundButton"));
-        assert!(value.contains("TryGetCurrentPattern"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn formats_cleanup_command_for_proxy_settings() {
+        let value = cleanup_proxies_command(&[MtProtoProxy {
+            server: "example.com".to_string(),
+            port: 443,
+            secret: "abcd".to_string(),
+        }]);
+        assert!(value.contains("tg://settings/data_and_storage/proxy/settings"));
+        assert!(value.contains("class `anonymous namespace''::ProxyRow"));
+        assert!(value.contains("Delete"));
     }
 }

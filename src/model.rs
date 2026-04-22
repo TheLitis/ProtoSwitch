@@ -175,6 +175,8 @@ pub struct AppState {
     pub pending_proxy: Option<ProxyRecord>,
     pub last_fetch_at: Option<DateTime<Utc>>,
     pub last_apply_at: Option<DateTime<Utc>>,
+    pub current_proxy_status: String,
+    pub source_status: String,
     pub watcher: WatcherSnapshot,
     pub recent_proxies: VecDeque<ProxyRecord>,
     pub last_error: Option<String>,
@@ -228,11 +230,20 @@ impl AppState {
     pub fn mark_healthy(&mut self) {
         self.watcher.failure_streak = 0;
         self.last_error = None;
+        self.current_proxy_status = "работает".to_string();
     }
 
     pub fn mark_failure(&mut self) -> u32 {
         self.watcher.failure_streak = self.watcher.failure_streak.saturating_add(1);
         self.watcher.failure_streak
+    }
+
+    pub fn set_current_proxy_status(&mut self, status: impl Into<String>) {
+        self.current_proxy_status = status.into();
+    }
+
+    pub fn set_source_status(&mut self, status: impl Into<String>) {
+        self.source_status = status.into();
     }
 }
 

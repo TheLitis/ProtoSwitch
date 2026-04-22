@@ -17,6 +17,7 @@ pub enum Commands {
     Watch(WatchArgs),
     Status(StatusArgs),
     Switch(SwitchArgs),
+    Cleanup,
     Doctor(DoctorArgs),
     Autostart {
         #[command(subcommand)]
