@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0-beta.5"
+  #define AppVersion "0.1.0-beta.6"
 #endif
 #ifndef RepoRoot
   #error RepoRoot must be defined.
