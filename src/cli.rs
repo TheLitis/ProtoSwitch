@@ -8,7 +8,7 @@ use clap::{Args, Parser, Subcommand};
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -74,4 +74,28 @@ pub struct DoctorArgs {
 pub enum AutostartCommand {
     Install,
     Remove,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_without_command() {
+        let cli = Cli::parse_from(["protoswitch"]);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parses_status_command() {
+        let cli = Cli::parse_from(["protoswitch", "status", "--plain"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Status(StatusArgs {
+                plain: true,
+                json: false
+            }))
+        ));
+    }
 }

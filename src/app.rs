@@ -22,13 +22,39 @@ pub fn run() -> anyhow::Result<()> {
     paths.ensure_dirs()?;
 
     match cli.command {
-        Commands::Init(args) => handle_init(&paths, args),
-        Commands::Watch(args) => handle_watch(&paths, args),
-        Commands::Status(args) => handle_status(&paths, args),
-        Commands::Switch(args) => handle_switch(&paths, args),
-        Commands::Doctor(args) => handle_doctor(&paths, args),
-        Commands::Autostart { command } => handle_autostart(&paths, command),
+        Some(Commands::Init(args)) => handle_init(&paths, args),
+        Some(Commands::Watch(args)) => handle_watch(&paths, args),
+        Some(Commands::Status(args)) => handle_status(&paths, args),
+        Some(Commands::Switch(args)) => handle_switch(&paths, args),
+        Some(Commands::Doctor(args)) => handle_doctor(&paths, args),
+        Some(Commands::Autostart { command }) => handle_autostart(&paths, command),
+        None => handle_launch(&paths),
     }
+}
+
+fn handle_launch(paths: &AppPaths) -> anyhow::Result<()> {
+    if !paths.config_file.exists() {
+        return handle_init(
+            paths,
+            InitArgs {
+                non_interactive: !ui::stdout_is_terminal(),
+                autostart: false,
+                no_autostart: false,
+                check_interval: None,
+                connect_timeout: None,
+                failure_threshold: None,
+                history_size: None,
+            },
+        );
+    }
+
+    handle_status(
+        paths,
+        StatusArgs {
+            plain: !ui::stdout_is_terminal(),
+            json: false,
+        },
+    )
 }
 
 fn handle_init(paths: &AppPaths, args: InitArgs) -> anyhow::Result<()> {
