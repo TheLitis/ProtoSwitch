@@ -1,4 +1,4 @@
-ProtoSwitch v0.1.0-beta.7
+ProtoSwitch v0.1.0-beta.8
 
 Быстрый старт
 
@@ -6,7 +6,7 @@ ProtoSwitch v0.1.0-beta.7
 2. Если ProtoSwitch установлен через installer, первичная инициализация уже выполнена автоматически.
 3. Проверьте окружение командой protoswitch.exe doctor.
 4. Если нужен фоновый режим, включите autostart install или отметьте автозапуск во время установки.
-5. Запуск protoswitch.exe без аргументов открывает operator dashboard с быстрыми клавишами для switch, doctor, watcher и settings.
+5. Запуск protoswitch.exe без аргументов открывает terminal-first console с быстрыми клавишами для switch, cleanup, doctor, watcher и settings.
 6. Для постоянного мониторинга используйте protoswitch.exe watch.
 7. Для ручной смены proxy используйте protoswitch.exe switch.
 

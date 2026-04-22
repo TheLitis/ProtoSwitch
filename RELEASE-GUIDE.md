@@ -2,7 +2,7 @@
 
 Этот файл нужен для ручной публикации Windows-релизов ProtoSwitch через GitHub Releases.
 
-## Что должно попасть в релиз `v0.1.0-beta.7`
+## Что должно попасть в релиз `v0.1.0-beta.8`
 
 - `ProtoSwitch-Setup-x64.exe`
 - `protoswitch-portable-win-x64.zip`
@@ -32,9 +32,11 @@
 ## Что указать в release notes
 
 - Названия обоих артефактов.
-- Что обычный запуск теперь открывает operator dashboard с горячими клавишами для `switch`, `doctor`, `settings`, `autostart` и `watcher`.
-- Что fallback в Startup folder теперь использует `ProtoSwitch.lnk`, а legacy `ProtoSwitch.cmd` мигрируется автоматически.
-- Что `protoswitch.exe` и installer теперь используют встроенную иконку приложения.
+- Что обычный запуск теперь открывает более спокойную terminal-first console с горячими клавишами для `switch`, `cleanup`, `doctor`, `settings`, `autostart` и `watcher`.
+- Что ProtoSwitch теперь валидирует новые proxy до применения и пишет явный статус источника и текущего proxy.
+- Что при применении proxy приложение старается вернуть фокус в предыдущее окно и не оставлять Telegram поверх рабочего стола.
+- Что installer теперь предлагает отдельную галочку для desktop shortcut на финальной странице.
+- Что `protoswitch.exe` и installer теперь используют иконку с прозрачным фоном.
 - Разницу между per-user и machine-wide установкой.
 - Напоминание, что machine-wide install не делает ProtoSwitch Windows Service.
 - Правило автозапуска: сначала `scheduled_task`, затем `startup_folder`.
