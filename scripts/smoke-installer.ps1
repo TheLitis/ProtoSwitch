@@ -37,7 +37,9 @@ function Get-ExistingInstallations {
 
     $entries = foreach ($root in $roots) {
         Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -eq 'ProtoSwitch' } |
+            Where-Object {
+                $_.PSObject.Properties.Match('DisplayName').Count -gt 0 -and $_.DisplayName -eq 'ProtoSwitch'
+            } |
             Select-Object DisplayName, DisplayVersion, InstallLocation, PSPath
     }
 
@@ -52,8 +54,13 @@ function Test-StartupShortcut {
 }
 
 function Test-ScheduledTask {
-    $task = schtasks /Query /TN 'ProtoSwitch Watcher' 2>$null
-    return $LASTEXITCODE -eq 0
+    $taskName = 'ProtoSwitch Watcher'
+    $process = Start-Process -FilePath 'cmd.exe' `
+        -ArgumentList '/c', "schtasks /Query /TN ""$taskName"" >nul 2>&1" `
+        -Wait `
+        -PassThru `
+        -WindowStyle Hidden
+    return $process.ExitCode -eq 0
 }
 
 function Assert-CleanEnvironment {
@@ -62,7 +69,7 @@ function Assert-CleanEnvironment {
         throw 'Smoke installer expects a clean machine: protoswitch.exe is already running.'
     }
 
-    $installs = Get-ExistingInstallations
+    $installs = @(Get-ExistingInstallations)
     if ($installs.Count -gt 0) {
         throw 'Smoke installer expects a clean machine: existing ProtoSwitch installer entry found.'
     }
