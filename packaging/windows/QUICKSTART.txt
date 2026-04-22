@@ -1,4 +1,4 @@
-ProtoSwitch v0.1.0-beta.9
+ProtoSwitch v0.1.0-beta.10
 
 Быстрый старт
 
