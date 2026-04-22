@@ -183,7 +183,7 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
         return ui::run_status(paths);
     }
 
-        print_plain_status_v2(paths, &config, &state, &autostart);
+    print_plain_status_v2(paths, &config, &state, &autostart);
     Ok(())
 }
 
@@ -292,14 +292,20 @@ fn watch_cycle(
     }
     if telegram_running {
         if let Some(record) = state.pending_proxy.clone() {
-            return apply_proxy_record(
+            match apply_proxy_record(
                 paths,
                 config,
                 &mut state,
                 record,
                 "Использован сохранённый pending proxy".to_string(),
                 "Pending proxy применён",
-            );
+            ) {
+                Ok(message) => return Ok(message),
+                Err(error) => {
+                    let message = error.to_string();
+                    let _ = paths.append_log(format!("pending proxy apply rejected: {message}"));
+                }
+            }
         }
     }
     let current_is_healthy = state
@@ -339,33 +345,38 @@ fn watch_cycle(
         state.save(&paths.state_file)?;
         return Ok("Есть pending proxy, ждём запуска Telegram.".to_string());
     }
-    let record = match fetch_validated_candidate(paths, config, provider, &state.recent_proxy_values()) {
-        Ok(record) => record,
-        Err(error) => {
-            state.watcher.mode = WatcherMode::Error;
-            state.set_source_status(error.to_string());
-            if state.current_proxy.is_some() {
-                state.set_current_proxy_status("текущий proxy не работает, replacement не найден");
-            } else {
-                state.set_current_proxy_status("рабочий proxy не найден");
-            }
-            state.save(&paths.state_file)?;
-            return Err(error);
-        }
-    };
-    state.last_fetch_at = Some(record.captured_at);
-    state.push_recent(record.clone(), config.watcher.history_size);
-    state.set_source_status(format!("найден рабочий proxy: {}", record.proxy.short_label()));
     if telegram_running {
-        return apply_proxy_record(
+        return apply_candidate_with_retries(
             paths,
             config,
+            provider,
             &mut state,
-            record.clone(),
-            format!("Найден рабочий proxy: {}", record.proxy.short_label()),
             "Watcher переключил proxy",
         );
     }
+    let record =
+        match fetch_validated_candidate(paths, config, provider, &state.recent_proxy_values()) {
+            Ok(record) => record,
+            Err(error) => {
+                state.watcher.mode = WatcherMode::Error;
+                state.set_source_status(error.to_string());
+                if state.current_proxy.is_some() {
+                    state.set_current_proxy_status(
+                        "текущий proxy не работает, replacement не найден",
+                    );
+                } else {
+                    state.set_current_proxy_status("рабочий proxy не найден");
+                }
+                state.save(&paths.state_file)?;
+                return Err(error);
+            }
+        };
+    state.last_fetch_at = Some(record.captured_at);
+    state.push_recent(record.clone(), config.watcher.history_size);
+    state.set_source_status(format!(
+        "найден рабочий proxy: {}",
+        record.proxy.short_label()
+    ));
     state.pending_proxy = Some(record.clone());
     state.watcher.mode = WatcherMode::WaitingForTelegram;
     state.set_current_proxy_status(if state.current_proxy.is_some() {
@@ -469,7 +480,14 @@ fn print_plain_status(
             "нет".to_string()
         }
     );
-    println!("Автоподчистка proxy: {}", if config.watcher.auto_cleanup_dead_proxies { "вкл" } else { "выкл" });
+    println!(
+        "Автоподчистка proxy: {}",
+        if config.watcher.auto_cleanup_dead_proxies {
+            "вкл"
+        } else {
+            "выкл"
+        }
+    );
     if let Some(target) = &autostart.target {
         println!("Цель автозапуска: {target}");
     }
@@ -509,7 +527,10 @@ fn print_plain_status_v2(
             .unwrap_or_else(|| "нет".to_string())
     );
     println!("Режим watcher: {}", watcher_mode(&state.watcher.mode));
-    println!("Telegram запущен: {}", yes_no(state.watcher.telegram_running));
+    println!(
+        "Telegram запущен: {}",
+        yes_no(state.watcher.telegram_running)
+    );
     if let Some(record) = &state.current_proxy {
         println!("Последний успешный источник: {}", record.source);
     }
@@ -761,6 +782,29 @@ fn fetch_validated_candidate(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Рабочий proxy не найден")))
 }
 
+fn store_apply_failure(
+    paths: &AppPaths,
+    config: &AppConfig,
+    state: &mut AppState,
+    record: &ProxyRecord,
+    current_status: String,
+    source_status: String,
+    error_message: String,
+    log_message: String,
+) -> anyhow::Result<()> {
+    let _ = telegram::remove_proxies(std::slice::from_ref(&record.proxy));
+    state.pending_proxy = None;
+    state.watcher.mode = WatcherMode::Error;
+    state.watcher.failure_streak = config.watcher.failure_threshold;
+    state.last_error = Some(error_message);
+    state.set_current_proxy_status(current_status);
+    state.set_source_status(source_status);
+    state.push_recent(record.clone(), config.watcher.history_size);
+    state.save(&paths.state_file)?;
+    paths.append_log(log_message)?;
+    Ok(())
+}
+
 fn apply_proxy_record(
     paths: &AppPaths,
     config: &AppConfig,
@@ -769,37 +813,64 @@ fn apply_proxy_record(
     source_status: String,
     success_prefix: &str,
 ) -> anyhow::Result<String> {
-    telegram::open_proxy_link(&record.proxy)?;
+    state.push_recent(record.clone(), config.watcher.history_size);
+    if let Err(error) =
+        telegram::open_proxy_link(&record.proxy, config.watcher.connect_timeout_secs)
+    {
+        let details = error.to_string();
+        store_apply_failure(
+            paths,
+            config,
+            state,
+            &record,
+            format!("Telegram не подтвердил добавление proxy: {details}"),
+            format!(
+                "Источник дал кандидата {}, но диалог Telegram завершился ошибкой: {details}",
+                record.proxy.short_label()
+            ),
+            format!(
+                "Telegram не подтвердил добавление proxy: {}",
+                record.proxy.short_label()
+            ),
+            format!(
+                "telegram dialog rejected proxy {} with error {details}",
+                record.proxy.short_label()
+            ),
+        )?;
+        return Err(anyhow::anyhow!(
+            "Telegram не подтвердил добавление proxy: {}",
+            record.proxy.short_label()
+        ));
+    }
     let telegram_status =
-        telegram::probe_proxy_status(&record.proxy, config.watcher.connect_timeout_secs)?;
+        telegram::settle_proxy_status(&record.proxy, config.watcher.connect_timeout_secs)?;
     match telegram_status {
         telegram::ManagedProxyStatus::Unavailable(details) => {
-            let _ = telegram::remove_proxies(std::slice::from_ref(&record.proxy));
-            state.pending_proxy = None;
-            state.watcher.mode = WatcherMode::Error;
-            state.watcher.failure_streak = config.watcher.failure_threshold;
-            state.last_error = Some(format!(
-                "Telegram пометил proxy как недоступный: {}",
-                record.proxy.short_label()
-            ));
-            state.set_current_proxy_status(format!("Telegram отклонил proxy: {details}"));
-            state.set_source_status(format!(
-                "Источник дал кандидата {}, но Telegram показал статус: {details}",
-                record.proxy.short_label()
-            ));
-            state.save(&paths.state_file)?;
-            paths.append_log(format!(
-                "telegram rejected proxy {} with status {details}",
-                record.proxy.short_label()
-            ))?;
+            store_apply_failure(
+                paths,
+                config,
+                state,
+                &record,
+                format!("Telegram отклонил proxy: {details}"),
+                format!(
+                    "Источник дал кандидата {}, но Telegram показал статус: {details}",
+                    record.proxy.short_label()
+                ),
+                format!(
+                    "Telegram пометил proxy как недоступный: {}",
+                    record.proxy.short_label()
+                ),
+                format!(
+                    "telegram rejected proxy {} with status {details}",
+                    record.proxy.short_label()
+                ),
+            )?;
             Err(anyhow::anyhow!(
                 "Telegram пометил proxy как недоступный: {}",
                 record.proxy.short_label()
             ))
         }
-        telegram::ManagedProxyStatus::Available(details)
-        | telegram::ManagedProxyStatus::Checking(details)
-        | telegram::ManagedProxyStatus::Unknown(details) => {
+        telegram::ManagedProxyStatus::Available(details) => {
             state.current_proxy = Some(record.clone());
             state.pending_proxy = None;
             state.last_fetch_at.get_or_insert(record.captured_at);
@@ -810,7 +881,6 @@ fn apply_proxy_record(
             state.last_error = None;
             state.set_current_proxy_status(format!("подключён, Telegram: {details}"));
             state.set_source_status(source_status);
-            state.push_recent(record.clone(), config.watcher.history_size);
             try_cleanup_dead_proxies(paths, config, state);
             state.save(&paths.state_file)?;
             paths.append_log(format!(
@@ -819,27 +889,90 @@ fn apply_proxy_record(
             ))?;
             Ok(format!("{success_prefix}: {}", record.proxy.short_label()))
         }
-        telegram::ManagedProxyStatus::Missing => {
-            state.current_proxy = Some(record.clone());
-            state.pending_proxy = None;
-            state.last_fetch_at.get_or_insert(record.captured_at);
-            state.last_apply_at = Some(Utc::now());
-            state.watcher.mode = WatcherMode::Switching;
-            state.watcher.telegram_running = true;
-            state.watcher.failure_streak = 0;
-            state.last_error = None;
-            state.set_current_proxy_status("подключён, Telegram ещё не показал строку статуса");
-            state.set_source_status(source_status);
-            state.push_recent(record.clone(), config.watcher.history_size);
-            try_cleanup_dead_proxies(paths, config, state);
-            state.save(&paths.state_file)?;
-            paths.append_log(format!(
-                "proxy applied {} without visible telegram status",
+        telegram::ManagedProxyStatus::Checking(details)
+        | telegram::ManagedProxyStatus::Unknown(details) => {
+            store_apply_failure(
+                paths,
+                config,
+                state,
+                &record,
+                format!("Telegram не подтвердил подключение proxy: {details}"),
+                format!(
+                    "Источник дал кандидата {}, но Telegram не подтвердил подключение: {details}",
+                    record.proxy.short_label()
+                ),
+                format!(
+                    "Telegram не подтвердил подключение proxy: {}",
+                    record.proxy.short_label()
+                ),
+                format!(
+                    "telegram did not settle proxy {} and returned status {details}",
+                    record.proxy.short_label()
+                ),
+            )?;
+            Err(anyhow::anyhow!(
+                "Telegram не подтвердил подключение proxy: {}",
                 record.proxy.short_label()
-            ))?;
-            Ok(format!("{success_prefix}: {}", record.proxy.short_label()))
+            ))
+        }
+        telegram::ManagedProxyStatus::Missing => {
+            store_apply_failure(
+                paths,
+                config,
+                state,
+                &record,
+                "Telegram не сохранил proxy в списке".to_string(),
+                format!(
+                    "Источник дал кандидата {}, но Telegram не сохранил proxy",
+                    record.proxy.short_label()
+                ),
+                format!("Telegram не сохранил proxy: {}", record.proxy.short_label()),
+                format!(
+                    "telegram did not persist proxy {} after apply",
+                    record.proxy.short_label()
+                ),
+            )?;
+            Err(anyhow::anyhow!(
+                "Telegram не сохранил proxy: {}",
+                record.proxy.short_label()
+            ))
         }
     }
+}
+
+fn apply_candidate_with_retries(
+    paths: &AppPaths,
+    config: &AppConfig,
+    provider: &MtProtoProvider,
+    state: &mut AppState,
+    success_prefix: &str,
+) -> anyhow::Result<String> {
+    let mut rejected = state.recent_proxy_values();
+    let attempts = config.watcher.history_size.max(3).min(6);
+    let mut last_error = None;
+
+    for _ in 0..attempts {
+        let record = fetch_validated_candidate(paths, config, provider, &rejected)?;
+        rejected.push(record.proxy.clone());
+        state.last_fetch_at = Some(record.captured_at);
+        match apply_proxy_record(
+            paths,
+            config,
+            state,
+            record.clone(),
+            format!("Найден рабочий proxy: {}", record.proxy.short_label()),
+            success_prefix,
+        ) {
+            Ok(message) => return Ok(message),
+            Err(error) => {
+                let message = error.to_string();
+                let _ = paths.append_log(format!("candidate apply rejected: {message}"));
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Рабочий proxy не найден")))
 }
 
 pub(crate) fn switch_to_candidate(paths: &AppPaths, dry_run: bool) -> anyhow::Result<String> {
@@ -858,15 +991,7 @@ pub(crate) fn switch_to_candidate(paths: &AppPaths, dry_run: bool) -> anyhow::Re
     if dry_run {
         return Ok(format!("Новый proxy: {}", record.proxy.deep_link()));
     }
-    state.last_fetch_at = Some(record.captured_at);
-    apply_proxy_record(
-        paths,
-        &config,
-        &mut state,
-        record.clone(),
-        format!("Найден рабочий proxy: {}", record.proxy.short_label()),
-        "Применён proxy",
-    )
+    apply_candidate_with_retries(paths, &config, &provider, &mut state, "Применён proxy")
 }
 
 pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {

@@ -1,6 +1,7 @@
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
@@ -45,9 +46,10 @@ pub fn check_proxy(proxy: &MtProtoProxy, timeout_secs: u64) -> bool {
 }
 
 #[cfg(windows)]
-pub fn open_proxy_link(proxy: &MtProtoProxy) -> anyhow::Result<()> {
-    let output = run_hidden_powershell_output(&apply_proxy_command(&proxy.deep_link()))
-        .context("Не удалось вызвать PowerShell для tg://proxy")?;
+pub fn open_proxy_link(proxy: &MtProtoProxy, timeout_secs: u64) -> anyhow::Result<()> {
+    let output =
+        run_hidden_powershell_output(&apply_proxy_command(&proxy.deep_link(), timeout_secs))
+            .context("Не удалось вызвать PowerShell для tg://proxy")?;
 
     if !output.status.success() {
         return Err(anyhow!(render_output(&output)));
@@ -57,7 +59,7 @@ pub fn open_proxy_link(proxy: &MtProtoProxy) -> anyhow::Result<()> {
 }
 
 #[cfg(not(windows))]
-pub fn open_proxy_link(_proxy: &MtProtoProxy) -> anyhow::Result<()> {
+pub fn open_proxy_link(_proxy: &MtProtoProxy, _timeout_secs: u64) -> anyhow::Result<()> {
     Err(anyhow!("Поддерживается только Windows"))
 }
 
@@ -84,6 +86,37 @@ pub fn probe_proxy_status(
     _timeout_secs: u64,
 ) -> anyhow::Result<ManagedProxyStatus> {
     Err(anyhow!("Поддерживается только Windows"))
+}
+
+pub fn settle_proxy_status(
+    proxy: &MtProtoProxy,
+    timeout_secs: u64,
+) -> anyhow::Result<ManagedProxyStatus> {
+    let attempts = match proxy.kind {
+        ProxyKind::MtProto => 8,
+        ProxyKind::Socks5 => 6,
+    };
+    let pause = Duration::from_millis(700);
+    let mut last_status = ManagedProxyStatus::Missing;
+
+    for attempt in 0..attempts {
+        let status = probe_proxy_status(proxy, timeout_secs)?;
+        match status {
+            ManagedProxyStatus::Available(_) | ManagedProxyStatus::Unavailable(_) => {
+                return Ok(status);
+            }
+            ManagedProxyStatus::Checking(_)
+            | ManagedProxyStatus::Unknown(_)
+            | ManagedProxyStatus::Missing => {
+                last_status = status;
+                if attempt + 1 < attempts {
+                    sleep(pause);
+                }
+            }
+        }
+    }
+
+    Ok(last_status)
 }
 
 #[cfg(windows)]
@@ -331,7 +364,8 @@ fn run_hidden_powershell_output(script: &str) -> anyhow::Result<Output> {
 }
 
 #[cfg(windows)]
-fn apply_proxy_command(value: &str) -> String {
+fn apply_proxy_command(value: &str, timeout_secs: u64) -> String {
+    let timeout_ms = (timeout_secs.max(3) + 4).saturating_mul(1_000).to_string();
     let script = r#"$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 Add-Type @"
@@ -359,71 +393,224 @@ function Restore-PreviousWindow($handle) {
   [ProtoSwitchNative]::ShowWindowAsync($handle, 9) | Out-Null
   [ProtoSwitchNative]::SetForegroundWindow($handle) | Out-Null
 }
-$previous = [ProtoSwitchNative]::GetForegroundWindow()
-Start-Process __LINK__
-$deadline = [DateTime]::UtcNow.AddMilliseconds(6500)
-while ([DateTime]::UtcNow -lt $deadline) {
+function Get-MainWindow() {
   $proc = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {
-    Start-Sleep -Milliseconds 120
-    continue
+    return $null
   }
-  $main = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$proc.MainWindowHandle)
+  [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$proc.MainWindowHandle)
+}
+function Wait-ForDialog($timeoutMs) {
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
   $scope = [System.Windows.Automation.TreeScope]::Descendants
-  $boxCond = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
-    'class Ui::GenericBox'
+  $classes = @(
+    'class Ui::GenericBox',
+    'class `anonymous namespace''::ProxyBox'
   )
-  $boxes = $main.FindAll($scope, $boxCond)
-  $box = $null
-  for ($i = 0; $i -lt $boxes.Count; $i++) {
-    $candidate = $boxes.Item($i)
-    if (-not $candidate.Current.IsOffscreen) {
-      $box = $candidate
-      break
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $main = Get-MainWindow
+    if ($null -eq $main) {
+      Start-Sleep -Milliseconds 120
+      continue
+    }
+    foreach ($className in $classes) {
+      $cond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+        $className
+      )
+      $items = $main.FindAll($scope, $cond)
+      for ($i = 0; $i -lt $items.Count; $i++) {
+        $candidate = $items.Item($i)
+        if (-not $candidate.Current.IsOffscreen) {
+          return [PSCustomObject]@{ Main = $main; Element = $candidate }
+        }
+      }
+    }
+    Start-Sleep -Milliseconds 120
+  }
+  return $null
+}
+function Get-TextSnapshot($element) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Text
+  )
+  $items = $element.FindAll($scope, $cond)
+  $values = @()
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $name = $items.Item($i).Current.Name
+    if (-not [string]::IsNullOrWhiteSpace($name)) {
+      $values += $name
     }
   }
-  if ($null -eq $box) {
-    Start-Sleep -Milliseconds 120
-    continue
-  }
-  Restore-PreviousWindow $previous
-  $buttonCond = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
-    'class Ui::RoundButton'
+  ($values -join ' | ')
+}
+function Get-VisibleButtons($element) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
   )
-  $buttons = $box.FindAll($scope, $buttonCond)
-  $primary = $null
-  $bestY = -2147483648
-  for ($i = 0; $i -lt $buttons.Count; $i++) {
-    $candidate = $buttons.Item($i)
+  $items = $element.FindAll($scope, $cond)
+  $values = @()
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $candidate = $items.Item($i)
     if ($candidate.Current.IsOffscreen -or -not $candidate.Current.IsEnabled) {
       continue
     }
-    $name = $candidate.Current.Name
-    if ($name -match 'Connect|Подключ|Use|Использ') {
-      $primary = $candidate
-      break
-    }
-    $candidateY = [int]$candidate.Current.BoundingRectangle.Y
-    if ($candidateY -gt $bestY) {
-      $primary = $candidate
-      $bestY = $candidateY
-    }
+    $values += $candidate
   }
-  if ($null -eq $primary) {
-    Start-Sleep -Milliseconds 120
-    continue
-  }
-  if (Invoke-Element $primary) {
-    exit 0
-  }
-  Start-Sleep -Milliseconds 120
+  $values
 }
+function Find-NamedButton($element, $pattern) {
+  $buttons = Get-VisibleButtons $element
+  foreach ($candidate in $buttons) {
+    $name = $candidate.Current.Name
+    if ($name -match $pattern) {
+      return $candidate
+    }
+  }
+  return $null
+}
+function Find-PrimaryButton($element) {
+  $buttons = Get-VisibleButtons $element
+  $pattern = 'Add|Connect|Use|Enable|Save|Done|Добав|Подключ|Использ|Включ|Сохран|Готов'
+  foreach ($candidate in $buttons) {
+    $name = $candidate.Current.Name
+    if ($name -match $pattern) {
+      return $candidate
+    }
+  }
+  $primary = $null
+  $bestScore = -2147483648
+  foreach ($candidate in $buttons) {
+    $rect = $candidate.Current.BoundingRectangle
+    $candidateScore = ([int]$rect.Y * 10000) + [int]$rect.X
+    if ($candidateScore -gt $bestScore) {
+      $primary = $candidate
+      $bestScore = $candidateScore
+    }
+  }
+  return $primary
+}
+function Close-Dialog($element) {
+  $cancel = Find-NamedButton $element 'Cancel|Close|Dismiss|Отмена|Закры|Позже'
+  if ($null -ne $cancel -and (Invoke-Element $cancel)) {
+    return $true
+  }
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::IconButton'
+  )
+  $items = $element.FindAll($scope, $cond)
+  $target = $null
+  $bestScore = -2147483648
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $candidate = $items.Item($i)
+    if ($candidate.Current.IsOffscreen -or -not $candidate.Current.IsEnabled) {
+      continue
+    }
+    $rect = $candidate.Current.BoundingRectangle
+    $candidateScore = ([int]$rect.X * 10000) - [int]$rect.Y
+    if ($candidateScore -gt $bestScore) {
+      $target = $candidate
+      $bestScore = $candidateScore
+    }
+  }
+  if ($null -ne $target) {
+    return (Invoke-Element $target)
+  }
+  return $false
+}
+function Get-DialogStatus($element) {
+  $labels = Get-TextSnapshot $element
+  $normalized = $labels.ToLowerInvariant()
+  if ($normalized -match 'not available|timed out|timeout|failed|error|denied|недоступ|не работает|не удалось') {
+    return 'unavailable:' + $labels
+  }
+  if ($normalized -match 'checking|connecting|loading|wait|провер|ожид|подключение') {
+    return 'checking:' + $labels
+  }
+  if ($normalized -match 'available|connected|online|working|доступ|работает|успеш|подключен') {
+    return 'available:' + $labels
+  }
+  if ([string]::IsNullOrWhiteSpace($labels)) {
+    return 'unknown:dialog visible'
+  }
+  return 'unknown:' + $labels
+}
+$previous = [ProtoSwitchNative]::GetForegroundWindow()
+Start-Process __LINK__
+$dialog = Wait-ForDialog 6500
+if ($null -eq $dialog) {
+  Restore-PreviousWindow $previous
+  Write-Output 'proxy dialog not found'
+  exit 1
+}
+$check = Find-NamedButton $dialog.Element 'Check|Status|Провер|Статус'
+$requiresPositiveStatus = $null -ne $check
+if ($requiresPositiveStatus) {
+  if (-not (Invoke-Element $check)) {
+    Restore-PreviousWindow $previous
+    Write-Output 'status check button did not respond'
+    exit 1
+  }
+  Start-Sleep -Milliseconds 350
+}
+$deadline = [DateTime]::UtcNow.AddMilliseconds(__TIMEOUT_MS__)
+$lastStatus = 'unknown:dialog visible'
+while ([DateTime]::UtcNow -lt $deadline) {
+  $lastStatus = Get-DialogStatus $dialog.Element
+  if ($lastStatus.StartsWith('available:')) {
+    $primary = Find-PrimaryButton $dialog.Element
+    if ($null -eq $primary) {
+      Restore-PreviousWindow $previous
+      Write-Output 'confirm button not found'
+      exit 1
+    }
+    if (Invoke-Element $primary) {
+      Restore-PreviousWindow $previous
+      Write-Output $lastStatus
+      exit 0
+    }
+    Restore-PreviousWindow $previous
+    Write-Output 'confirm button did not respond'
+    exit 1
+  }
+  if ($lastStatus.StartsWith('unavailable:')) {
+    Close-Dialog $dialog.Element | Out-Null
+    Restore-PreviousWindow $previous
+    Write-Output $lastStatus
+    exit 2
+  }
+  if (-not $requiresPositiveStatus) {
+    $primary = Find-PrimaryButton $dialog.Element
+    if ($null -eq $primary) {
+      Restore-PreviousWindow $previous
+      Write-Output 'confirm button not found'
+      exit 1
+    }
+    if (Invoke-Element $primary) {
+      Restore-PreviousWindow $previous
+      Write-Output $lastStatus
+      exit 0
+    }
+    Restore-PreviousWindow $previous
+    Write-Output 'confirm button did not respond'
+    exit 1
+  }
+  Start-Sleep -Milliseconds 280
+}
+Close-Dialog $dialog.Element | Out-Null
 Restore-PreviousWindow $previous
-exit 1"#;
+Write-Output $lastStatus
+exit 2"#;
 
-    script.replace("__LINK__", &ps_literal(value))
+    script
+        .replace("__LINK__", &ps_literal(value))
+        .replace("__TIMEOUT_MS__", &timeout_ms)
 }
 
 #[cfg(all(windows, test))]
@@ -1211,9 +1398,18 @@ exit 0"#;
         )
         .replace("__SERVER__", &ps_literal(&proxy.server))
         .replace("__PORT__", &proxy.port.to_string())
-        .replace("__SECRET__", &ps_literal(proxy.secret.as_deref().unwrap_or("")))
-        .replace("__USER__", &ps_literal(proxy.username.as_deref().unwrap_or("")))
-        .replace("__PASS__", &ps_literal(proxy.password.as_deref().unwrap_or("")))
+        .replace(
+            "__SECRET__",
+            &ps_literal(proxy.secret.as_deref().unwrap_or("")),
+        )
+        .replace(
+            "__USER__",
+            &ps_literal(proxy.username.as_deref().unwrap_or("")),
+        )
+        .replace(
+            "__PASS__",
+            &ps_literal(proxy.password.as_deref().unwrap_or("")),
+        )
         .replace("__TIMEOUT_MS__", &timeout_ms)
 }
 
@@ -1523,19 +1719,23 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn formats_powershell_command_for_tg_link() {
-        let value = apply_proxy_command("tg://proxy?server=test&port=443&secret=abcd");
+        let value = apply_proxy_command("tg://proxy?server=test&port=443&secret=abcd", 4);
         assert!(value.contains("Start-Process 'tg://proxy?server=test&port=443&secret=abcd'"));
         assert!(value.contains("Restore-PreviousWindow $previous"));
-        assert!(value.contains("$buttons = $box.FindAll($scope, $buttonCond)"));
+        assert!(value.contains("Check|Status|Провер|Статус"));
+        assert!(
+            value.contains(
+                "Add|Connect|Use|Enable|Save|Done|Добав|Подключ|Использ|Включ|Сохран|Готов"
+            )
+        );
+        assert!(!value.contains("__TIMEOUT_MS__"));
     }
 
     #[test]
     #[cfg(windows)]
     fn formats_probe_command_for_proxy_settings() {
-        let value = probe_proxy_status_command(
-            &MtProtoProxy::mtproto("example.com", 443, "abcd"),
-            4,
-        );
+        let value =
+            probe_proxy_status_command(&MtProtoProxy::mtproto("example.com", 443, "abcd"), 4);
         assert!(value.contains("tg://settings/data_and_storage/proxy/settings"));
         assert!(value.contains("Get-TextSnapshot"));
         assert!(value.contains("available:"));
