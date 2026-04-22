@@ -31,7 +31,8 @@ pub fn run_setup(config: AppConfig) -> anyhow::Result<AppConfig> {
     loop {
         session.terminal.draw(|frame| render_setup(frame, &draft))?;
 
-        if let Event::Key(key) = event::read().context("Не удалось прочитать клавиатуру")? {
+        if let Event::Key(key) = event::read().context("Не удалось прочитать клавиатуру")?
+        {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -276,9 +277,10 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 Err(error) => console.push_activity(format!("log: {error}")),
             },
             ConsoleAction::OpenDataDir => match app::open_in_shell(&paths.local_dir) {
-                Ok(_) => {
-                    console.set_result("Data", vec![format!("Открыта {}", paths.local_dir.display())])
-                }
+                Ok(_) => console.set_result(
+                    "Data",
+                    vec![format!("Открыта {}", paths.local_dir.display())],
+                ),
                 Err(error) => console.push_activity(format!("data: {error}")),
             },
             ConsoleAction::Refresh => {
@@ -325,10 +327,21 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
             let selected = index == draft.focus;
             let marker = if selected { "› " } else { "  " };
             ListItem::new(Line::from(vec![
-                Span::styled(marker, if selected { selected_style() } else { muted_style() }),
+                Span::styled(
+                    marker,
+                    if selected {
+                        selected_style()
+                    } else {
+                        muted_style()
+                    },
+                ),
                 Span::styled(
                     format!("{:<24}", field.label),
-                    if selected { selected_style() } else { text_style() },
+                    if selected {
+                        selected_style()
+                    } else {
+                        text_style()
+                    },
                 ),
                 Span::styled(field.value, value_style(selected, false)),
             ]))
@@ -485,7 +498,9 @@ fn render_console(
 
     match console.section {
         ConsoleSection::Dashboard => render_dashboard(frame, vertical[2], snapshot, console),
-        ConsoleSection::Actions => render_actions(frame, vertical[2], paths, snapshot, console, actions),
+        ConsoleSection::Actions => {
+            render_actions(frame, vertical[2], paths, snapshot, console, actions)
+        }
         ConsoleSection::Providers => render_providers(frame, vertical[2], snapshot, console),
         ConsoleSection::History => render_history(frame, vertical[2], snapshot, console),
     }
@@ -506,7 +521,11 @@ fn render_dashboard(
 ) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Length(8), Constraint::Min(7)])
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(8),
+            Constraint::Min(7),
+        ])
         .split(area);
 
     let hero = Layout::default()
@@ -516,7 +535,11 @@ fn render_dashboard(
 
     let middle = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(34), Constraint::Percentage(33), Constraint::Percentage(33)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(rows[1]);
 
     let current_proxy_style = snapshot
@@ -578,15 +601,24 @@ fn render_dashboard(
         ]),
         Line::from(vec![
             Span::styled("Last apply  ", muted_style()),
-            Span::styled(format_time(snapshot.state.last_apply_at.as_ref()), text_style()),
+            Span::styled(
+                format_time(snapshot.state.last_apply_at.as_ref()),
+                text_style(),
+            ),
             Span::raw("    "),
             Span::styled("Last fetch  ", muted_style()),
-            Span::styled(format_time(snapshot.state.last_fetch_at.as_ref()), text_style()),
+            Span::styled(
+                format_time(snapshot.state.last_fetch_at.as_ref()),
+                text_style(),
+            ),
         ]),
     ];
     frame.render_widget(
         Paragraph::new(route_lines)
-            .block(toned_panel("Route", &app::current_proxy_status_text(&snapshot.state)))
+            .block(toned_panel(
+                "Route",
+                &app::current_proxy_status_text(&snapshot.state),
+            ))
             .wrap(Wrap { trim: true }),
         hero[0],
     );
@@ -642,7 +674,10 @@ fn render_dashboard(
     ];
     frame.render_widget(
         Paragraph::new(runtime_lines)
-            .block(toned_panel("Runtime", &app::source_status_text(&snapshot.state)))
+            .block(toned_panel(
+                "Runtime",
+                &app::source_status_text(&snapshot.state),
+            ))
             .wrap(Wrap { trim: true }),
         hero[1],
     );
@@ -681,10 +716,14 @@ fn render_dashboard(
         &format!("{socks5_count} SOCKS5 source(s) active"),
     );
 
-    let ready_count = [snapshot.watcher_online, snapshot.state.watcher.telegram_running, !active_sources.is_empty()]
-        .into_iter()
-        .filter(|value| *value)
-        .count();
+    let ready_count = [
+        snapshot.watcher_online,
+        snapshot.state.watcher.telegram_running,
+        !active_sources.is_empty(),
+    ]
+    .into_iter()
+    .filter(|value| *value)
+    .count();
     render_gauge_card(
         frame,
         middle[2],
@@ -773,7 +812,11 @@ fn render_providers(
 
     let top = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(34), Constraint::Percentage(33), Constraint::Percentage(33)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(rows[0]);
 
     render_status_card(
@@ -818,9 +861,18 @@ fn render_providers(
     );
 
     let provider_lines = vec![
-        kv_line("Fetch tries", snapshot.config.provider.fetch_attempts.to_string()),
-        kv_line("Retry delay", format!("{} ms", snapshot.config.provider.fetch_retry_delay_ms)),
-        kv_line("Active feeds", snapshot.config.provider.active_sources().len().to_string()),
+        kv_line(
+            "Fetch tries",
+            snapshot.config.provider.fetch_attempts.to_string(),
+        ),
+        kv_line(
+            "Retry delay",
+            format!("{} ms", snapshot.config.provider.fetch_retry_delay_ms),
+        ),
+        kv_line(
+            "Active feeds",
+            snapshot.config.provider.active_sources().len().to_string(),
+        ),
         kv_line(
             "Current source",
             snapshot
@@ -875,8 +927,14 @@ fn render_history(
         .split(columns[1]);
 
     let detail = vec![
-        kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref())),
-        kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref())),
+        kv_line(
+            "Last fetch",
+            format_time(snapshot.state.last_fetch_at.as_ref()),
+        ),
+        kv_line(
+            "Last apply",
+            format_time(snapshot.state.last_apply_at.as_ref()),
+        ),
         kv_line(
             "Current source",
             snapshot
@@ -916,7 +974,10 @@ fn render_status_card(
     frame.render_widget(panel, area);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(compact(&headline, 34), semantic_style(&headline))),
+            Line::from(Span::styled(
+                compact(&headline, 34),
+                semantic_style(&headline),
+            )),
             Line::from(""),
             Line::from(Span::styled(compact(&status, 42), muted_style())),
         ])
@@ -938,7 +999,11 @@ fn render_gauge_card(
     frame.render_widget(panel, area);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(2), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(2),
+            Constraint::Min(1),
+        ])
         .split(inner);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -952,7 +1017,10 @@ fn render_gauge_card(
     frame.render_widget(
         Gauge::default()
             .ratio(ratio.clamp(0.0, 1.0))
-            .label(format!("{:>3}%", (ratio.clamp(0.0, 1.0) * 100.0).round() as u32))
+            .label(format!(
+                "{:>3}%",
+                (ratio.clamp(0.0, 1.0) * 100.0).round() as u32
+            ))
             .gauge_style(
                 Style::default()
                     .fg(tone_color(status))
@@ -1353,7 +1421,9 @@ impl TerminalSession {
         execute!(stdout, EnterAlternateScreen).context("Не удалось открыть alternate screen")?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).context("Не удалось создать TUI-терминал")?;
-        terminal.clear().context("Не удалось очистить экран терминала")?;
+        terminal
+            .clear()
+            .context("Не удалось очистить экран терминала")?;
         Ok(Self { terminal })
     }
 }
@@ -1507,7 +1577,8 @@ struct UiSnapshot {
 impl UiSnapshot {
     fn load(paths: &AppPaths) -> anyhow::Result<Self> {
         let (config, state, autostart) = app::load_status_snapshot(paths)?;
-        let watcher_online = app::watcher_process_exists() || app::watcher_is_recent(&config, &state);
+        let watcher_online =
+            app::watcher_process_exists() || app::watcher_is_recent(&config, &state);
         Ok(Self {
             config,
             state,

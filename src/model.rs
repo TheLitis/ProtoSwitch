@@ -32,11 +32,7 @@ pub struct TelegramProxy {
 pub type MtProtoProxy = TelegramProxy;
 
 impl TelegramProxy {
-    pub fn mtproto(
-        server: impl Into<String>,
-        port: u16,
-        secret: impl Into<String>,
-    ) -> Self {
+    pub fn mtproto(server: impl Into<String>, port: u16, secret: impl Into<String>) -> Self {
         Self {
             kind: ProxyKind::MtProto,
             server: server.into(),
@@ -132,7 +128,6 @@ impl TelegramProxy {
             self.masked_auth_label()
         )
     }
-
 }
 
 impl fmt::Display for TelegramProxy {
@@ -174,11 +169,7 @@ pub struct ProviderSource {
 }
 
 impl ProviderSource {
-    pub fn new(
-        name: impl Into<String>,
-        url: impl Into<String>,
-        kind: ProviderSourceKind,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, url: impl Into<String>, kind: ProviderSourceKind) -> Self {
         Self {
             name: name.into(),
             url: url.into(),
@@ -240,8 +231,7 @@ impl AppConfig {
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let body = toml::to_string_pretty(self).context("Не удалось сериализовать config.toml")?;
-        fs::write(path, body)
-            .with_context(|| format!("Не удалось записать {}", path.display()))?;
+        fs::write(path, body).with_context(|| format!("Не удалось записать {}", path.display()))?;
         Ok(())
     }
 
@@ -326,7 +316,10 @@ impl ProviderConfig {
             .iter()
             .filter(|source| !source.kind.is_socks5())
             .count();
-        let socks5 = active.iter().filter(|source| source.kind.is_socks5()).count();
+        let socks5 = active
+            .iter()
+            .filter(|source| source.kind.is_socks5())
+            .count();
         (mtproto, socks5)
     }
 }
@@ -419,8 +412,7 @@ impl AppState {
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let body =
             serde_json::to_string_pretty(self).context("Не удалось сериализовать state.json")?;
-        fs::write(path, body)
-            .with_context(|| format!("Не удалось записать {}", path.display()))?;
+        fs::write(path, body).with_context(|| format!("Не удалось записать {}", path.display()))?;
         Ok(())
     }
 
@@ -653,10 +645,12 @@ mod tests {
 
         let loaded = AppConfig::load(&paths).unwrap();
         assert!(loaded.provider.sources.len() > 2);
-        assert!(loaded
-            .provider
-            .sources
-            .iter()
-            .any(|source| source.name == "Argh94 SOCKS5"));
+        assert!(
+            loaded
+                .provider
+                .sources
+                .iter()
+                .any(|source| source.name == "Argh94 SOCKS5")
+        );
     }
 }

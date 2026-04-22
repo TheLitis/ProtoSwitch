@@ -35,8 +35,9 @@ impl MtProtoProvider {
             .build()
             .context("Не удалось создать HTTP-клиент")?;
 
-        let telegram_link_pattern = Regex::new(r#"(?i)(?:tg://|https?://t\.me/)(?:proxy|socks)\?[^"' <>\r\n]+"#)
-            .context("Не удалось подготовить шаблон Telegram proxy links")?;
+        let telegram_link_pattern =
+            Regex::new(r#"(?i)(?:tg://|https?://t\.me/)(?:proxy|socks)\?[^"' <>\r\n]+"#)
+                .context("Не удалось подготовить шаблон Telegram proxy links")?;
 
         Ok(Self {
             client,
@@ -76,7 +77,8 @@ impl MtProtoProvider {
                         only_recent.push(source.name.clone());
                         source_errors.push(format!("{}: только недавние кандидаты", source.name));
                     } else {
-                        source_errors.push(format!("{}: не удалось выбрать кандидата", source.name));
+                        source_errors
+                            .push(format!("{}: не удалось выбрать кандидата", source.name));
                     }
                 }
                 Err(error) => source_errors.push(format!("{}: {error}", source.name)),
@@ -202,10 +204,7 @@ impl MtProtoProvider {
             .collect())
     }
 
-    fn fetch_socks5_url_list(
-        &self,
-        source: &ProviderSource,
-    ) -> anyhow::Result<Vec<ProxyRecord>> {
+    fn fetch_socks5_url_list(&self, source: &ProviderSource) -> anyhow::Result<Vec<ProxyRecord>> {
         let body = self.fetch_html(&source.url)?;
         let mut proxies = Vec::new();
         for line in body.lines() {
@@ -264,8 +263,8 @@ pub fn parse_tg_link(tg_link: &str) -> anyhow::Result<MtProtoProxy> {
 
 pub fn parse_telegram_proxy_link(value: &str) -> anyhow::Result<TelegramProxy> {
     let sanitized = sanitize_url_fragment(value);
-    let url =
-        url::Url::parse(&sanitized).with_context(|| format!("Невалидная proxy-ссылка: {sanitized}"))?;
+    let url = url::Url::parse(&sanitized)
+        .with_context(|| format!("Невалидная proxy-ссылка: {sanitized}"))?;
 
     let (kind, pairs) = match url.scheme() {
         "tg" => {
@@ -329,8 +328,8 @@ pub fn parse_socks5_line(line: &str) -> anyhow::Result<TelegramProxy> {
     }
 
     if trimmed.contains("://") {
-        let url =
-            url::Url::parse(&trimmed).with_context(|| format!("Невалидный SOCKS5 URL: {trimmed}"))?;
+        let url = url::Url::parse(&trimmed)
+            .with_context(|| format!("Невалидный SOCKS5 URL: {trimmed}"))?;
         let scheme = url.scheme().to_ascii_lowercase();
         if scheme != "socks5" && scheme != "socks" {
             return Err(anyhow!("Строка не является socks5:// URL"));
@@ -419,9 +418,10 @@ mod tests {
 
     #[test]
     fn parses_socks_link() {
-        let proxy =
-            parse_telegram_proxy_link("tg://socks?server=127.0.0.1&port=1080&user=demo&pass=secret")
-                .unwrap();
+        let proxy = parse_telegram_proxy_link(
+            "tg://socks?server=127.0.0.1&port=1080&user=demo&pass=secret",
+        )
+        .unwrap();
         assert_eq!(proxy.kind, ProxyKind::Socks5);
         assert_eq!(proxy.username.as_deref(), Some("demo"));
         assert_eq!(proxy.password.as_deref(), Some("secret"));
