@@ -2,7 +2,7 @@
 
 Этот файл нужен для ручной публикации Windows-релизов ProtoSwitch через GitHub Releases.
 
-## Что должно попасть в релиз `v0.1.0-beta.6`
+## Что должно попасть в релиз `v0.1.0-beta.7`
 
 - `ProtoSwitch-Setup-x64.exe`
 - `protoswitch-portable-win-x64.zip`
@@ -32,8 +32,9 @@
 ## Что указать в release notes
 
 - Названия обоих артефактов.
-- Что `mtproto.ru` теперь пережидается серией попыток, а отсутствие свободных серверов показывается явной причиной.
-- Что `tg://proxy` теперь не только открывается, но и подтверждается через Windows UI Automation.
+- Что обычный запуск теперь открывает operator dashboard с горячими клавишами для `switch`, `doctor`, `settings`, `autostart` и `watcher`.
+- Что fallback в Startup folder теперь использует `ProtoSwitch.lnk`, а legacy `ProtoSwitch.cmd` мигрируется автоматически.
+- Что `protoswitch.exe` и installer теперь используют встроенную иконку приложения.
 - Разницу между per-user и machine-wide установкой.
 - Напоминание, что machine-wide install не делает ProtoSwitch Windows Service.
 - Правило автозапуска: сначала `scheduled_task`, затем `startup_folder`.
