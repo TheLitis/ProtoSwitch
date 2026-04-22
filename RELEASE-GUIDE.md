@@ -2,7 +2,7 @@
 
 Этот файл нужен для ручной публикации Windows-релизов ProtoSwitch через GitHub Releases.
 
-## Что должно попасть в релиз `v0.1.0-beta.4`
+## Что должно попасть в релиз `v0.1.0-beta.5`
 
 - `ProtoSwitch-Setup-x64.exe`
 - `protoswitch-portable-win-x64.zip`
