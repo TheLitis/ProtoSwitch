@@ -138,6 +138,7 @@ fn run_hidden_powershell(script: &str) -> anyhow::Result<std::process::ExitStatu
     Command::new("powershell")
         .args([
             "-NoProfile",
+            "-STA",
             "-NonInteractive",
             "-WindowStyle",
             "Hidden",
@@ -157,57 +158,68 @@ Start-Process '{link}'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $deadline = [DateTime]::UtcNow.AddMilliseconds(5000)
 while ([DateTime]::UtcNow -lt $deadline) {{
-  $root = [System.Windows.Automation.AutomationElement]::RootElement
-  $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
-  for ($i = 0; $i -lt $windows.Count; $i++) {{
-    $window = $windows.Item($i)
-    $name = $window.Current.Name
-    $class = $window.Current.ClassName
-    if ($class -ne 'Qt51518QWindowIcon' -and $name -ne 'Telegram') {{
+  $proc = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {{
+    Start-Sleep -Milliseconds 150
+    continue
+  }}
+  $main = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$proc.MainWindowHandle)
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $boxCond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::GenericBox'
+  )
+  $textCond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Text
+  )
+  $box = $null
+  $boxes = $main.FindAll($scope, $boxCond)
+  for ($i = 0; $i -lt $boxes.Count; $i++) {{
+    $candidate = $boxes.Item($i)
+    if ($candidate.Current.IsOffscreen) {{
       continue
     }}
-    $elements = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-    for ($j = 0; $j -lt $elements.Count; $j++) {{
-      $box = $elements.Item($j)
-      if ($box.Current.ClassName -ne 'class Ui::GenericBox') {{
-        continue
-      }}
-      if ($box.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window) {{
-        continue
-      }}
-      $nodes = $box.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-      $texts = New-Object System.Collections.Generic.List[string]
-      for ($k = 0; $k -lt $nodes.Count; $k++) {{
-        $node = $nodes.Item($k)
-        $label = $node.Current.Name
-        if (-not [string]::IsNullOrWhiteSpace($label)) {{
-          [void]$texts.Add($label)
-        }}
-      }}
-      if (($texts -join ' ') -notmatch 'Proxy|Server|Port|Secret|Прокси|Сервер|Порт|Секрет') {{
-        continue
-      }}
-      for ($k = 0; $k -lt $nodes.Count; $k++) {{
-        $button = $nodes.Item($k)
-        if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) {{
-          continue
-        }}
-        if ($button.Current.ClassName -ne 'class Ui::RoundButton') {{
-          continue
-        }}
-        if (-not $button.Current.IsEnabled -or $button.Current.IsOffscreen) {{
-          continue
-        }}
-        try {{
-          $pattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-          if ($null -ne $pattern) {{
-            ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
-            exit 0
-          }}
-        }} catch {{
-        }}
-      }}
+    $texts = $candidate.FindAll($scope, $textCond)
+    $blob = ''
+    for ($j = 0; $j -lt $texts.Count; $j++) {{
+      $blob += ' ' + $texts.Item($j).Current.Name
     }}
+    if ($blob -match 'Proxy|Прокси|Server|Сервер|Secret|Секрет|Port|Порт') {{
+      $box = $candidate
+      break
+    }}
+  }}
+  if ($null -eq $box) {{
+    Start-Sleep -Milliseconds 150
+    continue
+  }}
+  $layer = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($box)
+  if ($null -eq $layer) {{
+    Start-Sleep -Milliseconds 150
+    continue
+  }}
+  $buttonCond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::RoundButton'
+  )
+  $button = $null
+  $buttons = $layer.FindAll($scope, $buttonCond)
+  for ($i = 0; $i -lt $buttons.Count; $i++) {{
+    $candidate = $buttons.Item($i)
+    if (-not $candidate.Current.IsOffscreen -and $candidate.Current.IsEnabled) {{
+      $button = $candidate
+      break
+    }}
+  }}
+  if ($null -eq $button) {{
+    Start-Sleep -Milliseconds 150
+    continue
+  }}
+  $pattern = $null
+  if ($button.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {{
+    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    exit 0
   }}
   Start-Sleep -Milliseconds 150
 }}
@@ -233,5 +245,6 @@ mod tests {
         assert!(value.contains("UIAutomationClient"));
         assert!(value.contains("class Ui::GenericBox"));
         assert!(value.contains("class Ui::RoundButton"));
+        assert!(value.contains("TryGetCurrentPattern"));
     }
 }
