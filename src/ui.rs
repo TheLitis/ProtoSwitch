@@ -12,11 +12,11 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 
 use crate::APP_VERSION;
 use crate::app;
-use crate::model::{AppConfig, AppState, AutostartMethod, WatcherMode};
+use crate::model::{AppConfig, AppState, AutostartMethod, ProxyKind, WatcherMode};
 use crate::paths::AppPaths;
 use crate::windows;
 
@@ -38,7 +38,7 @@ pub fn run_setup(config: AppConfig) -> anyhow::Result<AppConfig> {
 
             match key.code {
                 KeyCode::Up => draft.focus = draft.focus.saturating_sub(1),
-                KeyCode::Down => draft.focus = (draft.focus + 1).min(5),
+                KeyCode::Down => draft.focus = (draft.focus + 1).min(6),
                 KeyCode::Left => draft.adjust(false),
                 KeyCode::Right => draft.adjust(true),
                 KeyCode::Enter => return Ok(draft.into_config()),
@@ -56,7 +56,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
     let mut last_refresh = Instant::now();
 
     loop {
-        if console.force_refresh || last_refresh.elapsed() >= Duration::from_millis(650) {
+        if console.force_refresh || last_refresh.elapsed() >= Duration::from_millis(550) {
             snapshot = UiSnapshot::load(paths)?;
             console.sync_error(&snapshot.state.last_error);
             console.force_refresh = false;
@@ -64,7 +64,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
         }
 
         let actions = console_actions(&snapshot);
-        if console.section == ConsoleSection::Control {
+        if console.section == ConsoleSection::Actions {
             console.focus = console.focus.min(actions.len().saturating_sub(1));
         } else {
             console.focus = 0;
@@ -94,18 +94,37 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 console.section = console.section.next();
                 continue;
             }
+            KeyCode::Char('1') => {
+                console.section = ConsoleSection::Dashboard;
+                continue;
+            }
+            KeyCode::Char('2') => {
+                console.section = ConsoleSection::Actions;
+                continue;
+            }
+            KeyCode::Char('3') => {
+                console.section = ConsoleSection::Providers;
+                continue;
+            }
+            KeyCode::Char('4') => {
+                console.section = ConsoleSection::History;
+                continue;
+            }
             _ => {}
         }
 
-        if console.section != ConsoleSection::Control {
+        if console.section != ConsoleSection::Actions {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('r') => {
                     console.force_refresh = true;
-                    console.set_result("Refresh", vec!["Данные перечитаны из config/state.".to_string()]);
+                    console.set_result(
+                        "Refresh",
+                        vec!["Снимок состояния перечитан из config/state.".to_string()],
+                    );
                 }
                 KeyCode::Char('c') => {
-                    console.section = ConsoleSection::Control;
+                    console.section = ConsoleSection::Actions;
                 }
                 _ => {}
             }
@@ -130,6 +149,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
             KeyCode::Char('x') => find_action(&actions, ConsoleAction::StopWatcher),
             KeyCode::Char('a') => find_action(&actions, ConsoleAction::ToggleAutostart),
             KeyCode::Char('k') => find_action(&actions, ConsoleAction::ToggleAutoCleanup),
+            KeyCode::Char('f') => find_action(&actions, ConsoleAction::ToggleSocks5Fallback),
             KeyCode::Char('e') => find_action(&actions, ConsoleAction::Settings),
             KeyCode::Char('d') => find_action(&actions, ConsoleAction::Doctor),
             KeyCode::Char('l') => find_action(&actions, ConsoleAction::OpenLog),
@@ -193,8 +213,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 Err(error) => console.push_activity(format!("watcher stop: {error}")),
             },
             ConsoleAction::ToggleAutostart => {
-                let enable =
-                    !(snapshot.autostart.installed || snapshot.config.autostart.enabled);
+                let enable = !(snapshot.autostart.installed || snapshot.config.autostart.enabled);
                 match app::set_autostart_enabled(paths, enable) {
                     Ok(message) => {
                         console.force_refresh = true;
@@ -208,9 +227,19 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 match app::set_auto_cleanup_enabled(paths, enable) {
                     Ok(message) => {
                         console.force_refresh = true;
-                        console.set_result("Autoclean", vec![message]);
+                        console.set_result("Auto-clean", vec![message]);
                     }
                     Err(error) => console.push_activity(format!("autoclean: {error}")),
+                }
+            }
+            ConsoleAction::ToggleSocks5Fallback => {
+                let enable = !snapshot.config.provider.enable_socks5_fallback;
+                match app::set_socks5_fallback_enabled(paths, enable) {
+                    Ok(message) => {
+                        console.force_refresh = true;
+                        console.set_result("Providers", vec![message]);
+                    }
+                    Err(error) => console.push_activity(format!("providers: {error}")),
                 }
             }
             ConsoleAction::Settings => {
@@ -241,7 +270,9 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 Err(error) => console.push_activity(format!("doctor: {error}")),
             },
             ConsoleAction::OpenLog => match app::open_in_notepad(&paths.log_file) {
-                Ok(_) => console.set_result("Log", vec![format!("Открыт {}", paths.log_file.display())]),
+                Ok(_) => {
+                    console.set_result("Log", vec![format!("Открыт {}", paths.log_file.display())])
+                }
                 Err(error) => console.push_activity(format!("log: {error}")),
             },
             ConsoleAction::OpenDataDir => match app::open_in_shell(&paths.local_dir) {
@@ -273,7 +304,7 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(54), Constraint::Percentage(46)])
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(vertical[1]);
 
     let title = Paragraph::new(Line::from(vec![
@@ -293,46 +324,79 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
         .map(|(index, field)| {
             let selected = index == draft.focus;
             let marker = if selected { "› " } else { "  " };
-            let value = Span::styled(field.value, value_style(selected, false));
             ListItem::new(Line::from(vec![
                 Span::styled(marker, if selected { selected_style() } else { muted_style() }),
-                Span::styled(format!("{:<24}", field.label), if selected { selected_style() } else { text_style() }),
-                value,
+                Span::styled(
+                    format!("{:<24}", field.label),
+                    if selected { selected_style() } else { text_style() },
+                ),
+                Span::styled(field.value, value_style(selected, false)),
             ]))
         })
         .collect::<Vec<_>>();
     frame.render_widget(List::new(fields).block(panel("Параметры")), body[0]);
 
     let active = draft.current_field();
-    let info = Paragraph::new(vec![
+    let info_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(8)])
+        .split(body[1]);
+
+    let details = vec![
         Line::from(vec![
             Span::styled(active.label, title_style()),
             Span::raw("  "),
-            Span::styled(active.value, value_style(true, false)),
+            Span::styled(active.value.clone(), value_style(true, false)),
         ]),
         Line::from(""),
         Line::from(active.description),
         Line::from(""),
-        Line::from(format!("Проверка: {} сек", draft.check_interval_secs)),
-        Line::from(format!("TCP timeout: {} сек", draft.connect_timeout_secs)),
-        Line::from(format!("Порог сбоев: {}", draft.failure_threshold)),
-        Line::from(format!("История proxy: {}", draft.history_size)),
-        Line::from(format!(
-            "Автозапуск: {}",
-            if draft.autostart_enabled { "вкл" } else { "выкл" }
-        )),
-        Line::from(format!(
-            "Автоподчистка: {}",
-            if draft.auto_cleanup_dead_proxies {
-                "вкл"
+        kv_line("Пул", draft.provider_pool()),
+        kv_line("Источники", draft.enabled_sources()),
+        kv_line(
+            "SOCKS5 fallback",
+            if draft.socks5_fallback {
+                "включён".to_string()
             } else {
-                "выкл"
-            }
-        )),
-    ])
-    .block(panel("Контекст"))
-    .wrap(Wrap { trim: true });
-    frame.render_widget(info, body[1]);
+                "выключен".to_string()
+            },
+        ),
+        kv_line(
+            "Автоподчистка",
+            if draft.auto_cleanup_dead_proxies {
+                "включена".to_string()
+            } else {
+                "выключена".to_string()
+            },
+        ),
+    ];
+    frame.render_widget(
+        Paragraph::new(details)
+            .block(toned_panel("Контекст", &active.value))
+            .wrap(Wrap { trim: true }),
+        info_rows[0],
+    );
+
+    let summary = vec![
+        kv_line("Проверка", format!("{} сек", draft.check_interval_secs)),
+        kv_line("TCP timeout", format!("{} сек", draft.connect_timeout_secs)),
+        kv_line("Порог сбоев", draft.failure_threshold.to_string()),
+        kv_line("История proxy", draft.history_size.to_string()),
+        kv_line(
+            "Автозапуск",
+            if draft.autostart_enabled {
+                "включён".to_string()
+            } else {
+                "выключен".to_string()
+            },
+        ),
+    ];
+    frame.render_widget(
+        Paragraph::new(summary)
+            .block(panel("Резюме"))
+            .wrap(Wrap { trim: true }),
+        info_rows[1],
+    );
 
     let footer = Paragraph::new("↑/↓ поле  ←/→ изменить  Enter сохранить  Esc выйти")
         .style(muted_style())
@@ -366,7 +430,11 @@ fn render_console(
         Span::styled(APP_VERSION, muted_style()),
         Span::raw("  "),
         badge(
-            if snapshot.watcher_online { "watcher on" } else { "watcher idle" },
+            if snapshot.watcher_online {
+                "watcher on"
+            } else {
+                "watcher idle"
+            },
             if snapshot.watcher_online {
                 Color::Rgb(118, 201, 160)
             } else {
@@ -388,16 +456,21 @@ fn render_console(
         ),
         Span::raw(" "),
         badge(
-            if snapshot.config.watcher.auto_cleanup_dead_proxies {
-                "autoclean"
+            if snapshot.config.provider.enable_socks5_fallback {
+                "socks5 ready"
             } else {
-                "manual clean"
+                "mtproto only"
             },
-            if snapshot.config.watcher.auto_cleanup_dead_proxies {
+            if snapshot.config.provider.enable_socks5_fallback {
                 Color::Rgb(118, 201, 160)
             } else {
                 Color::Rgb(247, 190, 103)
             },
+        ),
+        Span::raw(" "),
+        badge(
+            compact(&app::current_proxy_status_text(&snapshot.state), 20),
+            tone_color(&app::current_proxy_status_text(&snapshot.state)),
         ),
     ]))
     .block(panel("Session"));
@@ -411,20 +484,21 @@ fn render_console(
     );
 
     match console.section {
-        ConsoleSection::Overview => render_overview(frame, vertical[2], snapshot, console),
-        ConsoleSection::Control => render_control(frame, vertical[2], paths, snapshot, console, actions),
+        ConsoleSection::Dashboard => render_dashboard(frame, vertical[2], snapshot, console),
+        ConsoleSection::Actions => render_actions(frame, vertical[2], paths, snapshot, console, actions),
+        ConsoleSection::Providers => render_providers(frame, vertical[2], snapshot, console),
         ConsoleSection::History => render_history(frame, vertical[2], snapshot, console),
     }
 
     let footer = Paragraph::new(
-        "←/→ разделы  ↑/↓ выбор  Enter действие  S switch  P pending  W watcher  A autostart  K autoclean  R refresh  Q выйти",
+        "1-4 views  ←/→ switch view  ↑/↓ select  Enter run  S switch  P pending  W watcher  A autostart  K auto-clean  F socks5  R refresh  Q quit",
     )
     .style(muted_style())
     .block(panel("Keys"));
     frame.render_widget(footer, vertical[3]);
 }
 
-fn render_overview(
+fn render_dashboard(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &UiSnapshot,
@@ -432,12 +506,12 @@ fn render_overview(
 ) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Length(8), Constraint::Min(7)])
+        .constraints([Constraint::Length(9), Constraint::Length(8), Constraint::Min(7)])
         .split(area);
 
-    let top = Layout::default()
+    let hero = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(34), Constraint::Percentage(33), Constraint::Percentage(33)])
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
         .split(rows[0]);
 
     let middle = Layout::default()
@@ -445,104 +519,179 @@ fn render_overview(
         .constraints([Constraint::Percentage(34), Constraint::Percentage(33), Constraint::Percentage(33)])
         .split(rows[1]);
 
-    render_status_card(
-        frame,
-        top[0],
-        "Proxy",
-        snapshot
-            .state
-            .current_proxy
-            .as_ref()
-            .map(|record| record.proxy.short_label())
-            .unwrap_or_else(|| "не выбран".to_string()),
-        app::current_proxy_status_text(&snapshot.state),
+    let current_proxy_style = snapshot
+        .state
+        .current_proxy
+        .as_ref()
+        .map(|record| protocol_style(record.proxy.kind))
+        .unwrap_or_else(muted_style);
+    let pending_style = snapshot
+        .state
+        .pending_proxy
+        .as_ref()
+        .map(|record| protocol_style(record.proxy.kind))
+        .unwrap_or_else(muted_style);
+
+    let route_lines = vec![
+        Line::from(vec![
+            Span::styled("Current  ", muted_style()),
+            Span::styled(
+                snapshot
+                    .state
+                    .current_proxy
+                    .as_ref()
+                    .map(|record| record.proxy.short_label())
+                    .unwrap_or_else(|| "не выбран".to_string()),
+                current_proxy_style,
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Status   ", muted_style()),
+            Span::styled(
+                compact(&app::current_proxy_status_text(&snapshot.state), 54),
+                semantic_style(&app::current_proxy_status_text(&snapshot.state)),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Source   ", muted_style()),
+            Span::styled(
+                snapshot
+                    .state
+                    .current_proxy
+                    .as_ref()
+                    .map(|record| record.source.clone())
+                    .unwrap_or_else(|| "ещё не закреплён".to_string()),
+                text_style(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Pending  ", muted_style()),
+            Span::styled(
+                snapshot
+                    .state
+                    .pending_proxy
+                    .as_ref()
+                    .map(|record| record.proxy.short_label())
+                    .unwrap_or_else(|| "пусто".to_string()),
+                pending_style,
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Last apply  ", muted_style()),
+            Span::styled(format_time(snapshot.state.last_apply_at.as_ref()), text_style()),
+            Span::raw("    "),
+            Span::styled("Last fetch  ", muted_style()),
+            Span::styled(format_time(snapshot.state.last_fetch_at.as_ref()), text_style()),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(route_lines)
+            .block(toned_panel("Route", &app::current_proxy_status_text(&snapshot.state)))
+            .wrap(Wrap { trim: true }),
+        hero[0],
     );
 
-    render_status_card(
-        frame,
-        top[1],
-        "Source",
-        compact(&snapshot.config.provider.source_url, 28),
-        app::source_status_text(&snapshot.state),
-    );
-
-    render_status_card(
-        frame,
-        top[2],
-        "Pending",
-        snapshot
-            .state
-            .pending_proxy
-            .as_ref()
-            .map(|record| record.proxy.short_label())
-            .unwrap_or_else(|| "нет".to_string()),
-        if snapshot.state.pending_proxy.is_some() {
-            "ожидает применения".to_string()
-        } else {
-            "очередь пуста".to_string()
-        },
-    );
-
-    render_status_card(
-        frame,
-        middle[0],
-        "Watcher",
-        format!(
-            "{} / fail {}/{}",
-            mode_label(&snapshot.state.watcher.mode),
-            snapshot.state.watcher.failure_streak,
-            snapshot.config.watcher.failure_threshold
-        ),
-        if snapshot.watcher_online {
-            "headless процесс активен".to_string()
-        } else {
-            "headless процесс не виден".to_string()
-        },
-    );
-
-    render_status_card(
-        frame,
-        middle[1],
-        "Telegram",
-        if snapshot.state.watcher.telegram_running {
-            "запущен".to_string()
-        } else {
-            "не запущен".to_string()
-        },
-        snapshot
-            .state
-            .watcher
-            .next_check_at
-            .as_ref()
-            .map(|value| format!("следующая проверка {}", format_time(Some(value))))
-            .unwrap_or_else(|| "нет данных о следующей проверке".to_string()),
-    );
-
-    render_status_card(
-        frame,
-        middle[2],
-        "Runtime",
-        if snapshot.autostart.installed || snapshot.config.autostart.enabled {
+    let runtime_lines = vec![
+        kv_line(
+            "Watcher",
             format!(
-                "autostart {}",
+                "{} / fail {}/{}",
+                mode_label(&snapshot.state.watcher.mode),
+                snapshot.state.watcher.failure_streak,
+                snapshot.config.watcher.failure_threshold
+            ),
+        ),
+        kv_line(
+            "Telegram",
+            if snapshot.state.watcher.telegram_running {
+                "запущен".to_string()
+            } else {
+                "не запущен".to_string()
+            },
+        ),
+        kv_line(
+            "Source state",
+            compact(&app::source_status_text(&snapshot.state), 32),
+        ),
+        kv_line(
+            "Next check",
+            format_time(snapshot.state.watcher.next_check_at.as_ref()),
+        ),
+        kv_line(
+            "Autostart",
+            if snapshot.autostart.installed || snapshot.config.autostart.enabled {
                 snapshot
                     .autostart
                     .method
                     .as_ref()
                     .map(autostart_method_label)
                     .unwrap_or("pending")
-            )
-        } else {
-            "ручной запуск".to_string()
-        },
-        format!(
-            "auto-clean {}",
-            if snapshot.config.watcher.auto_cleanup_dead_proxies {
-                "on"
+                    .to_string()
             } else {
-                "off"
-            }
+                "выключен".to_string()
+            },
         ),
+        kv_line(
+            "Auto-clean",
+            if snapshot.config.watcher.auto_cleanup_dead_proxies {
+                "включён".to_string()
+            } else {
+                "выключен".to_string()
+            },
+        ),
+    ];
+    frame.render_widget(
+        Paragraph::new(runtime_lines)
+            .block(toned_panel("Runtime", &app::source_status_text(&snapshot.state)))
+            .wrap(Wrap { trim: true }),
+        hero[1],
+    );
+
+    let failure_ratio = if snapshot.config.watcher.failure_threshold == 0 {
+        0.0
+    } else {
+        let remaining = snapshot
+            .config
+            .watcher
+            .failure_threshold
+            .saturating_sub(snapshot.state.watcher.failure_streak);
+        remaining as f64 / snapshot.config.watcher.failure_threshold as f64
+    };
+    render_gauge_card(
+        frame,
+        middle[0],
+        "Watcher health",
+        failure_ratio,
+        &format!(
+            "{}/{} failures",
+            snapshot.state.watcher.failure_streak, snapshot.config.watcher.failure_threshold
+        ),
+        &format!("mode: {}", mode_label(&snapshot.state.watcher.mode)),
+    );
+
+    let active_sources = snapshot.config.provider.active_sources();
+    let (mtproto_count, socks5_count) = snapshot.config.provider.source_counts();
+    let total_sources = active_sources.len().max(1) as f64;
+    render_gauge_card(
+        frame,
+        middle[1],
+        "Provider mix",
+        mtproto_count as f64 / total_sources,
+        &app::provider_pool_summary(&snapshot.config),
+        &format!("{socks5_count} SOCKS5 source(s) active"),
+    );
+
+    let ready_count = [snapshot.watcher_online, snapshot.state.watcher.telegram_running, !active_sources.is_empty()]
+        .into_iter()
+        .filter(|value| *value)
+        .count();
+    render_gauge_card(
+        frame,
+        middle[2],
+        "Readiness",
+        ready_count as f64 / 3.0,
+        &format!("{ready_count}/3 ready"),
+        &compact(&app::enabled_sources_summary(&snapshot.config), 34),
     );
 
     frame.render_widget(
@@ -553,7 +702,7 @@ fn render_overview(
     );
 }
 
-fn render_control(
+fn render_actions(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     paths: &AppPaths,
@@ -563,7 +712,7 @@ fn render_control(
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
+        .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
         .split(area);
 
     let action_items = actions
@@ -584,11 +733,11 @@ fn render_control(
             ]))
         })
         .collect::<Vec<_>>();
-    frame.render_widget(List::new(action_items).block(panel("Control")), columns[0]);
+    frame.render_widget(List::new(action_items).block(panel("Actions")), columns[0]);
 
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(8)])
+        .constraints([Constraint::Length(11), Constraint::Min(8)])
         .split(columns[1]);
 
     let detail = if console.inspector_lines.is_empty() {
@@ -596,7 +745,6 @@ fn render_control(
     } else {
         console.inspector_lines.clone()
     };
-
     frame.render_widget(
         Paragraph::new(detail)
             .block(panel(&console.inspector_title))
@@ -612,6 +760,99 @@ fn render_control(
     );
 }
 
+fn render_providers(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &UiSnapshot,
+    console: &ConsoleState,
+) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(10)])
+        .split(area);
+
+    let top = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(34), Constraint::Percentage(33), Constraint::Percentage(33)])
+        .split(rows[0]);
+
+    render_status_card(
+        frame,
+        top[0],
+        "Pool",
+        app::provider_pool_summary(&snapshot.config),
+        app::enabled_sources_summary(&snapshot.config),
+    );
+    render_status_card(
+        frame,
+        top[1],
+        "Source state",
+        compact(&app::source_status_text(&snapshot.state), 26),
+        snapshot
+            .state
+            .current_proxy
+            .as_ref()
+            .map(|record| format!("last good feed: {}", record.source))
+            .unwrap_or_else(|| "ещё нет подтверждённого источника".to_string()),
+    );
+    render_status_card(
+        frame,
+        top[2],
+        "Fallback",
+        if snapshot.config.provider.enable_socks5_fallback {
+            "SOCKS5 fallback включён".to_string()
+        } else {
+            "только MTProto".to_string()
+        },
+        "F переключает добавочные SOCKS5-источники".to_string(),
+    );
+
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .split(rows[1]);
+
+    frame.render_widget(
+        List::new(provider_source_items(snapshot)).block(panel("Built-in feeds")),
+        bottom[0],
+    );
+
+    let provider_lines = vec![
+        kv_line("Fetch tries", snapshot.config.provider.fetch_attempts.to_string()),
+        kv_line("Retry delay", format!("{} ms", snapshot.config.provider.fetch_retry_delay_ms)),
+        kv_line("Active feeds", snapshot.config.provider.active_sources().len().to_string()),
+        kv_line(
+            "Current source",
+            snapshot
+                .state
+                .current_proxy
+                .as_ref()
+                .map(|record| record.source.clone())
+                .unwrap_or_else(|| "ещё не закреплён".to_string()),
+        ),
+        kv_line(
+            "Last error",
+            snapshot
+                .state
+                .last_error
+                .as_ref()
+                .map(|value| compact(value, 34))
+                .unwrap_or_else(|| "нет".to_string()),
+        ),
+        Line::from(""),
+        Line::from(Span::styled("Signals", title_style())),
+    ]
+    .into_iter()
+    .chain(console.activity_lines())
+    .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(provider_lines)
+            .block(panel("Provider policy"))
+            .wrap(Wrap { trim: true }),
+        bottom[1],
+    );
+}
+
 fn render_history(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -620,7 +861,7 @@ fn render_history(
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(area);
 
     frame.render_widget(
@@ -628,28 +869,38 @@ fn render_history(
         columns[0],
     );
 
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(10), Constraint::Min(8)])
+        .split(columns[1]);
+
     let detail = vec![
-        kv_line("Последний fetch", format_time(snapshot.state.last_fetch_at.as_ref())),
-        kv_line("Последний apply", format_time(snapshot.state.last_apply_at.as_ref())),
+        kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref())),
+        kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref())),
+        kv_line(
+            "Current source",
+            snapshot
+                .state
+                .current_proxy
+                .as_ref()
+                .map(|record| record.source.clone())
+                .unwrap_or_else(|| "нет".to_string()),
+        ),
         kv_line("Config", snapshot.paths.config_file.display().to_string()),
         kv_line("State", snapshot.paths.state_file.display().to_string()),
         kv_line("Log", snapshot.paths.log_file.display().to_string()),
     ];
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Min(8)])
-        .split(columns[1]);
-
     frame.render_widget(
-        Paragraph::new(detail).block(panel("Files")).wrap(Wrap { trim: true }),
-        rows[0],
+        Paragraph::new(detail)
+            .block(panel("Timeline"))
+            .wrap(Wrap { trim: true }),
+        right[0],
     );
     frame.render_widget(
         Paragraph::new(console.activity_lines())
-            .block(panel("Timeline"))
+            .block(panel("Signals"))
             .wrap(Wrap { trim: true }),
-        rows[1],
+        right[1],
     );
 }
 
@@ -660,15 +911,56 @@ fn render_status_card(
     headline: String,
     status: String,
 ) {
-    let status_style = semantic_style(&status);
-    let card = Paragraph::new(vec![
-        Line::from(Span::styled(compact(&headline, 34), title_style())),
-        Line::from(""),
-        Line::from(Span::styled(compact(&status, 40), status_style)),
-    ])
-    .wrap(Wrap { trim: true })
-    .block(panel(title));
-    frame.render_widget(card, area);
+    let panel = toned_panel(title, &headline);
+    let inner = panel.inner(area);
+    frame.render_widget(panel, area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(compact(&headline, 34), semantic_style(&headline))),
+            Line::from(""),
+            Line::from(Span::styled(compact(&status, 42), muted_style())),
+        ])
+        .wrap(Wrap { trim: true }),
+        inner,
+    );
+}
+
+fn render_gauge_card(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    title: &str,
+    ratio: f64,
+    label: &str,
+    status: &str,
+) {
+    let panel = toned_panel(title, status);
+    let inner = panel.inner(area);
+    frame.render_widget(panel, area);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(2), Constraint::Min(1)])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(compact(label, 28), title_style()),
+            Span::raw("  "),
+            Span::styled(compact(status, 18), semantic_style(status)),
+        ]))
+        .wrap(Wrap { trim: true }),
+        rows[0],
+    );
+    frame.render_widget(
+        Gauge::default()
+            .ratio(ratio.clamp(0.0, 1.0))
+            .label(format!("{:>3}%", (ratio.clamp(0.0, 1.0) * 100.0).round() as u32))
+            .gauge_style(
+                Style::default()
+                    .fg(tone_color(status))
+                    .bg(Color::Rgb(27, 35, 44))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        rows[1],
+    );
 }
 
 fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
@@ -694,7 +986,10 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
             "Telegram Desktop: {}",
             report.telegram_executable.as_deref().unwrap_or("не найден")
         )),
-        Line::from(format!("Telegram запущен: {}", yes_no(report.telegram_running))),
+        Line::from(format!(
+            "Telegram запущен: {}",
+            yes_no(report.telegram_running)
+        )),
         Line::from(format!(
             "Автозапуск: {}",
             if report.autostart.installed {
@@ -709,14 +1004,23 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
                 "нет".to_string()
             }
         )),
-        Line::from(format!("mtproto.ru: {}", probe)),
+        Line::from(format!(
+            "Feeds: {}",
+            if report.enabled_sources.is_empty() {
+                "нет".to_string()
+            } else {
+                report.enabled_sources.join(", ")
+            }
+        )),
+        Line::from(format!("Provider probe: {}", probe)),
     ]
 }
 
 fn section_tabs(section: ConsoleSection) -> Line<'static> {
     let sections = [
-        (ConsoleSection::Overview, "Overview"),
-        (ConsoleSection::Control, "Control"),
+        (ConsoleSection::Dashboard, "Dashboard"),
+        (ConsoleSection::Actions, "Actions"),
+        (ConsoleSection::Providers, "Providers"),
         (ConsoleSection::History, "History"),
     ];
 
@@ -735,7 +1039,6 @@ fn section_tabs(section: ConsoleSection) -> Line<'static> {
         };
         spans.push(Span::styled(format!(" {} ", label), style));
     }
-
     Line::from(spans)
 }
 
@@ -764,10 +1067,64 @@ fn history_items(state: &AppState) -> Vec<ListItem<'static>> {
         .iter()
         .take(10)
         .map(|record| {
-            ListItem::new(Line::from(vec![
-                Span::styled("• ", muted_style()),
-                Span::styled(record.proxy.short_label(), text_style()),
-            ]))
+            ListItem::new(vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} ", record.proxy.protocol_label()),
+                        protocol_style(record.proxy.kind),
+                    ),
+                    Span::styled(record.proxy.short_label(), text_style()),
+                ]),
+                Line::from(vec![
+                    Span::styled(compact(&record.source, 30), muted_style()),
+                    Span::raw("  "),
+                    Span::styled(format_record_time(record.captured_at), muted_style()),
+                ]),
+            ])
+        })
+        .collect()
+}
+
+fn provider_source_items(snapshot: &UiSnapshot) -> Vec<ListItem<'static>> {
+    snapshot
+        .config
+        .provider
+        .sources
+        .iter()
+        .map(|source| {
+            let status = if source.enabled {
+                if source.kind.is_socks5() && !snapshot.config.provider.enable_socks5_fallback {
+                    "paused by fallback"
+                } else {
+                    "active"
+                }
+            } else {
+                "disabled"
+            };
+            let protocol = if source.kind.is_socks5() {
+                Span::styled(
+                    format!("{} ", source.kind.label()),
+                    Style::default()
+                        .fg(Color::Rgb(247, 190, 103))
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled(
+                    format!("{} ", source.kind.label()),
+                    Style::default()
+                        .fg(Color::Rgb(109, 175, 255))
+                        .add_modifier(Modifier::BOLD),
+                )
+            };
+            ListItem::new(vec![
+                Line::from(vec![
+                    protocol,
+                    Span::styled(source.name.clone(), text_style()),
+                    Span::raw("  "),
+                    Span::styled(status, semantic_style(status)),
+                ]),
+                Line::from(Span::styled(compact(&source.url, 70), muted_style())),
+            ])
         })
         .collect()
 }
@@ -779,6 +1136,7 @@ fn console_actions(snapshot: &UiSnapshot) -> Vec<ConsoleAction> {
         ConsoleAction::StopWatcher,
         ConsoleAction::ToggleAutostart,
         ConsoleAction::ToggleAutoCleanup,
+        ConsoleAction::ToggleSocks5Fallback,
         ConsoleAction::Settings,
         ConsoleAction::Doctor,
         ConsoleAction::OpenLog,
@@ -806,8 +1164,8 @@ fn find_action(actions: &[ConsoleAction], needle: ConsoleAction) -> Option<Conso
 
 fn kv_line(label: &str, value: String) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("{label:<18}"), muted_style()),
-        Span::styled(compact(&value, 52), text_style()),
+        Span::styled(format!("{label:<16}"), muted_style()),
+        Span::styled(compact(&value, 54), text_style()),
     ])
 }
 
@@ -862,48 +1220,69 @@ fn format_time(value: Option<&chrono::DateTime<chrono::Utc>>) -> String {
         .unwrap_or_else(|| "нет данных".to_string())
 }
 
-fn semantic_style(value: &str) -> Style {
+fn format_record_time(value: chrono::DateTime<chrono::Utc>) -> String {
+    value
+        .with_timezone(&chrono::Local)
+        .format("%H:%M:%S")
+        .to_string()
+}
+
+fn tone_color(value: &str) -> Color {
     let lower = value.to_lowercase();
-    if lower.contains("работает")
+    if lower.contains("работ")
         || lower.contains("подключ")
         || lower.contains("доступ")
         || lower.contains("online")
         || lower.contains("ok")
-        || lower.contains("вкл")
         || lower.contains("active")
+        || lower.contains("enabled")
+        || lower.contains("ready")
+        || lower.contains("включ")
     {
-        return Style::default()
-            .fg(Color::Rgb(118, 201, 160))
-            .add_modifier(Modifier::BOLD);
+        return Color::Rgb(118, 201, 160);
     }
     if lower.contains("pending")
-        || lower.contains("ожида")
+        || lower.contains("wait")
         || lower.contains("checking")
-        || lower.contains("switch")
-        || lower.contains("жд")
         || lower.contains("manual")
+        || lower.contains("idle")
+        || lower.contains("ожид")
+        || lower.contains("paused")
+        || lower.contains("fallback")
+        || lower.contains("switch")
     {
-        return Style::default()
-            .fg(Color::Rgb(247, 190, 103))
-            .add_modifier(Modifier::BOLD);
+        return Color::Rgb(247, 190, 103);
     }
     if lower.contains("нет")
-        || lower.contains("error")
         || lower.contains("не ")
-        || lower.contains("idle")
+        || lower.contains("error")
         || lower.contains("off")
+        || lower.contains("откл")
         || lower.contains("reject")
-        || lower.contains("недоступ")
-        || lower.contains("отклонил")
+        || lower.contains("unavailable")
+        || lower.contains("dead")
+        || lower.contains("сбой")
     {
-        return Style::default()
-            .fg(Color::Rgb(229, 118, 118))
-            .add_modifier(Modifier::BOLD);
+        return Color::Rgb(229, 118, 118);
     }
+    Color::Rgb(109, 175, 255)
+}
 
+fn semantic_style(value: &str) -> Style {
     Style::default()
-        .fg(Color::Rgb(109, 175, 255))
+        .fg(tone_color(value))
         .add_modifier(Modifier::BOLD)
+}
+
+fn protocol_style(kind: ProxyKind) -> Style {
+    match kind {
+        ProxyKind::MtProto => Style::default()
+            .fg(Color::Rgb(109, 175, 255))
+            .add_modifier(Modifier::BOLD),
+        ProxyKind::Socks5 => Style::default()
+            .fg(Color::Rgb(247, 190, 103))
+            .add_modifier(Modifier::BOLD),
+    }
 }
 
 fn panel(title: &str) -> Block<'static> {
@@ -911,6 +1290,14 @@ fn panel(title: &str) -> Block<'static> {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(52, 66, 81)))
+        .title(title.to_string())
+}
+
+fn toned_panel(title: &str, signal: &str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(tone_color(signal)))
         .title(title.to_string())
 }
 
@@ -945,9 +1332,9 @@ fn value_style(selected: bool, alert: bool) -> Style {
     }
 }
 
-fn badge(text: &str, background: Color) -> Span<'static> {
+fn badge(text: impl Into<String>, background: Color) -> Span<'static> {
     Span::styled(
-        text.to_string(),
+        text.into(),
         Style::default()
             .fg(Color::Rgb(11, 16, 22))
             .bg(background)
@@ -989,6 +1376,7 @@ struct SetupDraft {
     history_size: usize,
     autostart_enabled: bool,
     auto_cleanup_dead_proxies: bool,
+    socks5_fallback: bool,
 }
 
 impl SetupDraft {
@@ -1002,6 +1390,7 @@ impl SetupDraft {
             history_size: config.watcher.history_size,
             autostart_enabled: config.autostart.enabled,
             auto_cleanup_dead_proxies: config.watcher.auto_cleanup_dead_proxies,
+            socks5_fallback: config.provider.enable_socks5_fallback,
         }
     }
 
@@ -1013,6 +1402,7 @@ impl SetupDraft {
             3 => adjust_usize(&mut self.history_size, increase, 1, 20, 1),
             4 => self.autostart_enabled = !self.autostart_enabled,
             5 => self.auto_cleanup_dead_proxies = !self.auto_cleanup_dead_proxies,
+            6 => self.socks5_fallback = !self.socks5_fallback,
             _ => {}
         }
     }
@@ -1025,10 +1415,23 @@ impl SetupDraft {
         config.watcher.history_size = self.history_size;
         config.watcher.auto_cleanup_dead_proxies = self.auto_cleanup_dead_proxies;
         config.autostart.enabled = self.autostart_enabled;
+        config.provider.enable_socks5_fallback = self.socks5_fallback;
         config
     }
 
-    fn fields(&self) -> [SetupField; 6] {
+    fn provider_pool(&self) -> String {
+        let mut config = self.original.clone();
+        config.provider.enable_socks5_fallback = self.socks5_fallback;
+        app::provider_pool_summary(&config)
+    }
+
+    fn enabled_sources(&self) -> String {
+        let mut config = self.original.clone();
+        config.provider.enable_socks5_fallback = self.socks5_fallback;
+        app::enabled_sources_summary(&config)
+    }
+
+    fn fields(&self) -> [SetupField; 7] {
         [
             SetupField {
                 label: "Интервал проверки",
@@ -1053,20 +1456,29 @@ impl SetupDraft {
             SetupField {
                 label: "Автозапуск watcher",
                 value: if self.autostart_enabled {
-                    "вкл".to_string()
+                    "включён".to_string()
                 } else {
-                    "выкл".to_string()
+                    "выключен".to_string()
                 },
                 description: "Запускать headless watcher при логине Windows.",
             },
             SetupField {
                 label: "Автоподчистка",
                 value: if self.auto_cleanup_dead_proxies {
-                    "вкл".to_string()
+                    "включена".to_string()
                 } else {
-                    "выкл".to_string()
+                    "выключена".to_string()
                 },
                 description: "Автоматически удалять из Telegram proxy, которые ProtoSwitch считает мёртвыми.",
+            },
+            SetupField {
+                label: "SOCKS5 fallback",
+                value: if self.socks5_fallback {
+                    "включён".to_string()
+                } else {
+                    "выключен".to_string()
+                },
+                description: "Разрешить fallback на бесплатные SOCKS5-источники, когда MTProto-ленты пусты или деградировали.",
             },
         ]
     }
@@ -1108,25 +1520,28 @@ impl UiSnapshot {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConsoleSection {
-    Overview,
-    Control,
+    Dashboard,
+    Actions,
+    Providers,
     History,
 }
 
 impl ConsoleSection {
     fn next(self) -> Self {
         match self {
-            ConsoleSection::Overview => ConsoleSection::Control,
-            ConsoleSection::Control => ConsoleSection::History,
-            ConsoleSection::History => ConsoleSection::Overview,
+            ConsoleSection::Dashboard => ConsoleSection::Actions,
+            ConsoleSection::Actions => ConsoleSection::Providers,
+            ConsoleSection::Providers => ConsoleSection::History,
+            ConsoleSection::History => ConsoleSection::Dashboard,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            ConsoleSection::Overview => ConsoleSection::History,
-            ConsoleSection::Control => ConsoleSection::Overview,
-            ConsoleSection::History => ConsoleSection::Control,
+            ConsoleSection::Dashboard => ConsoleSection::History,
+            ConsoleSection::Actions => ConsoleSection::Dashboard,
+            ConsoleSection::Providers => ConsoleSection::Actions,
+            ConsoleSection::History => ConsoleSection::Providers,
         }
     }
 }
@@ -1139,6 +1554,7 @@ enum ConsoleAction {
     StopWatcher,
     ToggleAutostart,
     ToggleAutoCleanup,
+    ToggleSocks5Fallback,
     Settings,
     Doctor,
     OpenLog,
@@ -1174,6 +1590,13 @@ impl ConsoleAction {
                     "enable auto-clean"
                 }
             }
+            ConsoleAction::ToggleSocks5Fallback => {
+                if snapshot.config.provider.enable_socks5_fallback {
+                    "disable socks5 fallback"
+                } else {
+                    "enable socks5 fallback"
+                }
+            }
             ConsoleAction::Settings => "settings",
             ConsoleAction::Doctor => "doctor",
             ConsoleAction::OpenLog => "open log",
@@ -1191,6 +1614,7 @@ impl ConsoleAction {
             ConsoleAction::StopWatcher => "[X]",
             ConsoleAction::ToggleAutostart => "[A]",
             ConsoleAction::ToggleAutoCleanup => "[K]",
+            ConsoleAction::ToggleSocks5Fallback => "[F]",
             ConsoleAction::Settings => "[E]",
             ConsoleAction::Doctor => "[D]",
             ConsoleAction::OpenLog => "[L]",
@@ -1203,8 +1627,8 @@ impl ConsoleAction {
     fn description(&self, snapshot: &UiSnapshot, paths: &AppPaths) -> Vec<String> {
         match self {
             ConsoleAction::SwitchNow => vec![
-                "Сразу запросить нового кандидата у mtproto.ru и применить его в Telegram.".to_string(),
-                "Теперь после auto-confirm ProtoSwitch дополнительно спрашивает у Telegram видимый статус proxy.".to_string(),
+                "Сразу запросить нового кандидата из встроенного пула источников и применить его в Telegram.".to_string(),
+                "После auto-confirm ProtoSwitch дополнительно проверяет видимый статус proxy внутри Telegram.".to_string(),
             ],
             ConsoleAction::ApplyPending => vec![
                 "Применить уже сохранённый pending proxy без нового fetch.".to_string(),
@@ -1228,13 +1652,18 @@ impl ConsoleAction {
             ConsoleAction::ToggleAutoCleanup => vec![if snapshot.config.watcher.auto_cleanup_dead_proxies {
                 "Отключить автоматическое удаление мёртвых proxy из управляемого списка Telegram.".to_string()
             } else {
-                "Включить автоматическое удаление мёртвых proxy после apply и при явной проверке.".to_string()
+                "Включить автоматическое удаление мёртвых proxy после apply и при повторной проверке.".to_string()
+            }],
+            ConsoleAction::ToggleSocks5Fallback => vec![if snapshot.config.provider.enable_socks5_fallback {
+                "Оставить только MTProto-источники и временно выключить SOCKS5 fallback.".to_string()
+            } else {
+                "Разрешить бесплатные SOCKS5-источники как запасной путь, когда MTProto-ленты пусты или деградируют.".to_string()
             }],
             ConsoleAction::Settings => vec![
-                "Изменить интервалы watcher, timeout, порог сбоев, историю, автозапуск и автоподчистку.".to_string(),
+                "Изменить интервалы watcher, timeout, порог сбоев, историю, автозапуск, автоподчистку и SOCKS5 fallback.".to_string(),
             ],
             ConsoleAction::Doctor => vec![
-                "Проверить tg:// handler, Telegram Desktop, mtproto.ru, state/config/logs и автозапуск.".to_string(),
+                "Проверить tg:// handler, Telegram Desktop, provider pool, state/config/logs и автозапуск.".to_string(),
             ],
             ConsoleAction::OpenLog => vec![format!("Открыть watch.log: {}", paths.log_file.display())],
             ConsoleAction::OpenDataDir => {
@@ -1315,7 +1744,7 @@ impl ConsoleState {
 impl Default for ConsoleState {
     fn default() -> Self {
         Self {
-            section: ConsoleSection::Overview,
+            section: ConsoleSection::Dashboard,
             focus: 0,
             activity: Vec::new(),
             inspector_title: "Context".to_string(),
