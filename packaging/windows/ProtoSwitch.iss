@@ -58,6 +58,7 @@ Name: "{autoprograms}\Удалить ProtoSwitch"; Filename: "{uninstallexe}"
 [Run]
 Filename: "{app}\protoswitch.exe"; Parameters: "init --non-interactive --no-autostart"; StatusMsg: "Настраивается ProtoSwitch..."; Flags: runhidden waituntilterminated runasoriginaluser
 Filename: "{app}\protoswitch.exe"; Parameters: "autostart install"; StatusMsg: "Включается автозапуск ProtoSwitch..."; Flags: runhidden waituntilterminated runasoriginaluser; Check: ShouldEnableAutostart
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -Command ""$ws = New-Object -ComObject WScript.Shell; $shortcut = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\ProtoSwitch.lnk'); $shortcut.TargetPath = '{app}\protoswitch.exe'; $shortcut.WorkingDirectory = '{app}'; $shortcut.IconLocation = '{app}\protoswitch.exe,0'; $shortcut.Save()"""; Description: "Добавить ярлык ProtoSwitch на рабочий стол"; Flags: postinstall runhidden runasoriginaluser unchecked skipifsilent
 Filename: "{app}\protoswitch.exe"; Description: "Запустить ProtoSwitch"; Flags: nowait postinstall runasoriginaluser skipifsilent
 
 [UninstallRun]
@@ -67,9 +68,6 @@ Filename: "{app}\protoswitch.exe"; Parameters: "autostart remove"; Flags: runhid
 Type: files; Name: "{autodesktop}\ProtoSwitch.lnk"
 
 [Code]
-var
-  DesktopShortcutCheckBox: TNewCheckBox;
-
 function GetInstallDir(Param: string): string;
 begin
   if IsAdminInstallMode then
@@ -81,48 +79,4 @@ end;
 function ShouldEnableAutostart: Boolean;
 begin
   Result := WizardIsTaskSelected('autostart');
-end;
-
-procedure InitializeWizard;
-begin
-  DesktopShortcutCheckBox := TNewCheckBox.Create(WizardForm);
-  DesktopShortcutCheckBox.Parent := WizardForm.FinishedLabel.Parent;
-  DesktopShortcutCheckBox.Caption := 'Добавить ярлык ProtoSwitch на рабочий стол';
-  DesktopShortcutCheckBox.Checked := True;
-  DesktopShortcutCheckBox.Width := WizardForm.FinishedLabel.Width;
-  DesktopShortcutCheckBox.Visible := False;
-end;
-
-procedure CurPageChanged(CurPageID: Integer);
-begin
-  if CurPageID = wpFinished then begin
-    if WizardForm.RunList.Visible then
-      DesktopShortcutCheckBox.Top := WizardForm.RunList.Top + WizardForm.RunList.Height + ScaleY(8)
-    else
-      DesktopShortcutCheckBox.Top := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(16);
-    DesktopShortcutCheckBox.Left := WizardForm.FinishedLabel.Left;
-    DesktopShortcutCheckBox.Visible := not WizardSilent;
-  end else begin
-    DesktopShortcutCheckBox.Visible := False;
-  end;
-end;
-
-procedure CreateDesktopShortcut;
-var
-  Shell: Variant;
-  Shortcut: Variant;
-begin
-  Shell := CreateOleObject('WScript.Shell');
-  Shortcut := Shell.CreateShortcut(ExpandConstant('{autodesktop}\ProtoSwitch.lnk'));
-  Shortcut.TargetPath := ExpandConstant('{app}\protoswitch.exe');
-  Shortcut.WorkingDirectory := ExpandConstant('{app}');
-  Shortcut.IconLocation := ExpandConstant('{app}\protoswitch.exe,0');
-  Shortcut.Save;
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  Result := True;
-  if (CurPageID = wpFinished) and DesktopShortcutCheckBox.Visible and DesktopShortcutCheckBox.Checked then
-    CreateDesktopShortcut;
 end;
