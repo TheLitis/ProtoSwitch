@@ -111,13 +111,15 @@ impl AppConfig {
 pub struct ProviderConfig {
     pub source_url: String,
     pub fetch_attempts: usize,
+    pub fetch_retry_delay_ms: u64,
 }
 
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             source_url: "https://mtproto.ru/personal.php".to_string(),
-            fetch_attempts: 4,
+            fetch_attempts: 8,
+            fetch_retry_delay_ms: 1_000,
         }
     }
 }

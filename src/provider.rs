@@ -15,10 +15,18 @@ pub struct MtProtoProvider {
     tg_link_pattern: Regex,
 }
 
+#[derive(Debug, Default)]
+struct HtmlProbe {
+    proxy: Option<MtProtoProxy>,
+    saw_waiting_message: bool,
+    saw_no_servers_message: bool,
+}
+
 impl MtProtoProvider {
     pub fn new(config: ProviderConfig) -> anyhow::Result<Self> {
         let client = Client::builder()
             .user_agent(format!("ProtoSwitch/{APP_VERSION}"))
+            .cookie_store(true)
             .timeout(Duration::from_secs(10))
             .build()
             .context("Не удалось создать HTTP-клиент")?;
@@ -34,32 +42,47 @@ impl MtProtoProvider {
     }
 
     pub fn fetch_candidate(&self, recent: &[MtProtoProxy]) -> anyhow::Result<ProxyRecord> {
+        let attempts = self.config.fetch_attempts.max(8);
+        let retry_delay = Duration::from_millis(self.config.fetch_retry_delay_ms.max(1_000));
         let mut last_proxy = None;
         let mut last_error = None;
+        let mut saw_waiting_message = false;
+        let mut saw_no_servers_message = false;
 
-        for attempt in 0..self.config.fetch_attempts.max(1) {
+        for attempt in 0..attempts {
             let html = match self.fetch_html() {
                 Ok(html) => html,
                 Err(error) => {
                     last_error = Some(error);
-                    if attempt + 1 < self.config.fetch_attempts.max(1) {
-                        thread::sleep(Duration::from_millis(350));
+                    if attempt + 1 < attempts {
+                        thread::sleep(retry_delay);
                         continue;
                     }
                     break;
                 }
             };
 
-            let proxy = match self.parse_html(&html) {
-                Ok(proxy) => proxy,
+            let probe = match self.inspect_html(&html) {
+                Ok(probe) => probe,
                 Err(error) => {
                     last_error = Some(error);
-                    if attempt + 1 < self.config.fetch_attempts.max(1) {
-                        thread::sleep(Duration::from_millis(350));
+                    if attempt + 1 < attempts {
+                        thread::sleep(retry_delay);
                         continue;
                     }
                     break;
                 }
+            };
+
+            saw_waiting_message |= probe.saw_waiting_message;
+            saw_no_servers_message |= probe.saw_no_servers_message;
+
+            let Some(proxy) = probe.proxy else {
+                if attempt + 1 < attempts {
+                    thread::sleep(retry_delay);
+                    continue;
+                }
+                break;
             };
 
             if !recent.contains(&proxy) {
@@ -68,8 +91,8 @@ impl MtProtoProvider {
 
             last_proxy = Some(proxy);
 
-            if attempt + 1 < self.config.fetch_attempts.max(1) {
-                thread::sleep(Duration::from_millis(350));
+            if attempt + 1 < attempts {
+                thread::sleep(retry_delay);
             }
         }
 
@@ -77,6 +100,20 @@ impl MtProtoProvider {
             return Err(anyhow!(
                 "Источник вернул только недавний proxy: {}",
                 proxy.short_label()
+            ));
+        }
+
+        if saw_no_servers_message {
+            return Err(anyhow!(
+                "mtproto.ru сейчас не отдаёт proxy: свободных серверов нет"
+            ));
+        }
+
+        if saw_waiting_message {
+            return Err(anyhow!(
+                "mtproto.ru не успел выдать proxy за {} попыток по {} мс",
+                attempts,
+                retry_delay.as_millis()
             ));
         }
 
@@ -94,25 +131,26 @@ impl MtProtoProvider {
             .error_for_status()
             .with_context(|| format!("Источник {} вернул ошибку", self.config.source_url))?;
 
-        response
-            .text()
-            .context("Не удалось прочитать HTML источника")
+        response.text().context("Не удалось прочитать HTML источника")
     }
 
-    pub fn parse_html(&self, html: &str) -> anyhow::Result<MtProtoProxy> {
-        let tg_link = self
+    fn inspect_html(&self, html: &str) -> anyhow::Result<HtmlProbe> {
+        let proxy = self
             .tg_link_pattern
             .find(html)
-            .map(|entry| entry.as_str())
-            .ok_or_else(|| anyhow!("В HTML не найден tg://proxy"))?;
+            .map(|entry| parse_tg_link(entry.as_str()))
+            .transpose()?;
 
-        parse_tg_link(tg_link)
+        Ok(HtmlProbe {
+            proxy,
+            saw_waiting_message: html.contains("Идёт выбор сервера"),
+            saw_no_servers_message: html.contains("Свободных серверов"),
+        })
     }
 }
 
 pub fn parse_tg_link(tg_link: &str) -> anyhow::Result<MtProtoProxy> {
-    let url =
-        url::Url::parse(tg_link).with_context(|| format!("Невалидный tg:// link: {tg_link}"))?;
+    let url = url::Url::parse(tg_link).with_context(|| format!("Невалидный tg:// link: {tg_link}"))?;
     if url.scheme() != "tg" || url.host_str() != Some("proxy") {
         return Err(anyhow!("Ссылка не является tg://proxy"));
     }
@@ -149,7 +187,7 @@ mod tests {
         <p>Your server - <a href="tg://proxy?server=example.com&port=443&secret=abcdef123456">proxy</a></p>
         "#;
 
-        let proxy = provider.parse_html(html).unwrap();
+        let proxy = provider.inspect_html(html).unwrap().proxy.unwrap();
         assert_eq!(proxy.server, "example.com");
         assert_eq!(proxy.port, 443);
         assert_eq!(proxy.secret, "abcdef123456");
@@ -161,5 +199,19 @@ mod tests {
         assert_eq!(proxy.server, "127.0.0.1");
         assert_eq!(proxy.port, 8080);
         assert_eq!(proxy.secret, "abc123");
+    }
+
+    #[test]
+    fn inspects_mtproto_waiting_html() {
+        let provider = MtProtoProvider::new(ProviderConfig::default()).unwrap();
+        let html = r#"
+        <p id="info-message">Идёт выбор сервера, подождите... (проверка занимает меньше 5 секунд)</p>
+        <p id="get-message" style="display:none;">Свободных серверов на данный момент нет.</p>
+        "#;
+
+        let probe = provider.inspect_html(html).unwrap();
+        assert!(probe.proxy.is_none());
+        assert!(probe.saw_waiting_message);
+        assert!(probe.saw_no_servers_message);
     }
 }
