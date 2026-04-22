@@ -25,15 +25,8 @@ pub fn install_autostart(executable: &Path) -> anyhow::Result<AutostartMethod> {
             let _ = remove_startup_launcher();
             Ok(AutostartMethod::ScheduledTask)
         }
-        Ok(output) => {
-            let message = render_output(&output);
-            if is_access_denied(&message) {
-                install_startup_launcher(executable)?;
-                return Ok(AutostartMethod::StartupFolder);
-            }
-            Err(anyhow!("schtasks /Create вернул ошибку: {message}"))
-        }
-        Err(error) => Err(error),
+        Ok(output) => install_startup_fallback(executable, &render_output(&output)),
+        Err(error) => install_startup_fallback(executable, &error.to_string()),
     }
 }
 
@@ -147,6 +140,20 @@ fn install_startup_launcher(executable: &Path) -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
+fn install_startup_fallback(
+    executable: &Path,
+    scheduled_task_error: &str,
+) -> anyhow::Result<AutostartMethod> {
+    install_startup_launcher(executable)
+        .map(|_| AutostartMethod::StartupFolder)
+        .map_err(|startup_error| {
+            anyhow!(
+                "schtasks /Create вернул ошибку: {scheduled_task_error} | startup_folder: {startup_error}"
+            )
+        })
+}
+
+#[cfg(windows)]
 fn remove_startup_launcher() -> anyhow::Result<()> {
     let path = startup_launcher_path()?;
     if path.exists() {
@@ -176,16 +183,11 @@ fn startup_launcher_body(executable: &Path) -> String {
 }
 
 #[cfg(windows)]
-fn is_access_denied(message: &str) -> bool {
-    let value = message.to_ascii_lowercase();
-    value.contains("access is denied") || message.contains("Отказано в доступе")
-}
-
-#[cfg(windows)]
 fn task_not_found(message: &str) -> bool {
-    let value = message.to_ascii_lowercase();
+    let value = message.to_lowercase();
     value.contains("cannot find the file specified")
-        || message.contains("Не удается найти указанный файл")
+        || value.contains("не удается найти указанный файл")
+        || value.contains("не удаётся найти указанный файл")
 }
 
 #[cfg(windows)]
@@ -208,10 +210,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_access_denied_text() {
-        assert!(is_access_denied("ERROR: Access is denied."));
-        assert!(is_access_denied("Ошибка: Отказано в доступе."));
-        assert!(!is_access_denied("ERROR: file not found"));
+    fn detects_task_not_found_text() {
+        assert!(task_not_found(
+            "ERROR: The system cannot find the file specified."
+        ));
+        assert!(task_not_found("Ошибка: Не удается найти указанный файл."));
+        assert!(!task_not_found("ERROR: Access is denied."));
     }
 
     #[test]

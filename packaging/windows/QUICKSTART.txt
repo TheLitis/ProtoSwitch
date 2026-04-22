@@ -1,0 +1,25 @@
+ProtoSwitch v0.1.0-beta.3
+
+Быстрый старт
+
+1. Если используете portable-версию, запустите protoswitch.exe init --non-interactive --no-autostart.
+2. Если ProtoSwitch установлен через installer, первичная инициализация уже выполнена автоматически.
+3. Проверьте окружение командой protoswitch.exe doctor.
+4. Если нужен фоновый режим, включите autostart install или отметьте автозапуск во время установки.
+5. Для постоянного мониторинга используйте protoswitch.exe watch.
+6. Для ручной смены proxy используйте protoswitch.exe switch.
+
+Что ставится
+
+- protoswitch.exe
+- README.md
+- CHANGELOG.md
+- этот QUICKSTART.txt
+
+Что не удаляется автоматически при uninstall
+
+- %APPDATA%\ProtoSwitch\config.toml
+- %LOCALAPPDATA%\ProtoSwitch\state.json
+- %LOCALAPPDATA%\ProtoSwitch\logs\watch.log
+
+Installer при uninstall сам снимает configured autostart, если он был создан этим дистрибутивом.
