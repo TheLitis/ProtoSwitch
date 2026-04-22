@@ -34,20 +34,13 @@ pub fn check_proxy(proxy: &MtProtoProxy, timeout_secs: u64) -> bool {
 
 #[cfg(windows)]
 pub fn open_proxy_link(proxy: &MtProtoProxy) -> anyhow::Result<()> {
-    let status = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            &shell_open_command(&proxy.deep_link()),
-        ])
-        .status()
+    let status = run_hidden_powershell(&apply_proxy_command(&proxy.deep_link()))
         .context("Не удалось вызвать PowerShell для tg://proxy")?;
 
     if !status.success() {
-        return Err(anyhow!("Telegram не принял tg://proxy"));
+        return Err(anyhow!(
+            "Не удалось автоматически подтвердить окно Telegram для tg://proxy"
+        ));
     }
 
     Ok(())
@@ -141,8 +134,85 @@ fn common_telegram_paths() -> Vec<PathBuf> {
 }
 
 #[cfg(windows)]
-fn shell_open_command(value: &str) -> String {
-    format!("Start-Process '{}'", value.replace('\'', "''"))
+fn run_hidden_powershell(script: &str) -> anyhow::Result<std::process::ExitStatus> {
+    Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ])
+        .status()
+        .context("Не удалось запустить PowerShell")
+}
+
+#[cfg(windows)]
+fn apply_proxy_command(value: &str) -> String {
+    let link = value.replace('\'', "''");
+    format!(
+        r#"$ErrorActionPreference = 'SilentlyContinue'
+Start-Process '{link}'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$deadline = [DateTime]::UtcNow.AddMilliseconds(5000)
+while ([DateTime]::UtcNow -lt $deadline) {{
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+  for ($i = 0; $i -lt $windows.Count; $i++) {{
+    $window = $windows.Item($i)
+    $name = $window.Current.Name
+    $class = $window.Current.ClassName
+    if ($class -ne 'Qt51518QWindowIcon' -and $name -ne 'Telegram') {{
+      continue
+    }}
+    $elements = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+    for ($j = 0; $j -lt $elements.Count; $j++) {{
+      $box = $elements.Item($j)
+      if ($box.Current.ClassName -ne 'class Ui::GenericBox') {{
+        continue
+      }}
+      if ($box.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window) {{
+        continue
+      }}
+      $nodes = $box.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+      $texts = New-Object System.Collections.Generic.List[string]
+      for ($k = 0; $k -lt $nodes.Count; $k++) {{
+        $node = $nodes.Item($k)
+        $label = $node.Current.Name
+        if (-not [string]::IsNullOrWhiteSpace($label)) {{
+          [void]$texts.Add($label)
+        }}
+      }}
+      if (($texts -join ' ') -notmatch 'Proxy|Server|Port|Secret|Прокси|Сервер|Порт|Секрет') {{
+        continue
+      }}
+      for ($k = 0; $k -lt $nodes.Count; $k++) {{
+        $button = $nodes.Item($k)
+        if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) {{
+          continue
+        }}
+        if ($button.Current.ClassName -ne 'class Ui::RoundButton') {{
+          continue
+        }}
+        if (-not $button.Current.IsEnabled -or $button.Current.IsOffscreen) {{
+          continue
+        }}
+        try {{
+          $pattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+          if ($null -ne $pattern) {{
+            ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+            exit 0
+          }}
+        }} catch {{
+        }}
+      }}
+    }}
+  }}
+  Start-Sleep -Milliseconds 150
+}}
+exit 1"#
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -158,10 +228,10 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn formats_powershell_command_for_tg_link() {
-        let value = shell_open_command("tg://proxy?server=test&port=443&secret=abcd");
-        assert_eq!(
-            value,
-            "Start-Process 'tg://proxy?server=test&port=443&secret=abcd'"
-        );
+        let value = apply_proxy_command("tg://proxy?server=test&port=443&secret=abcd");
+        assert!(value.contains("Start-Process 'tg://proxy?server=test&port=443&secret=abcd'"));
+        assert!(value.contains("UIAutomationClient"));
+        assert!(value.contains("class Ui::GenericBox"));
+        assert!(value.contains("class Ui::RoundButton"));
     }
 }
