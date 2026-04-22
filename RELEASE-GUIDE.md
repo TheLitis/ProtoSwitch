@@ -1,6 +1,6 @@
 # Release Guide
 
-Этот файл нужен для ручной публикации Windows-релизов ProtoSwitch через GitHub Releases.
+Этот файл нужен для воспроизводимой публикации Windows-релизов ProtoSwitch через GitHub Releases.
 
 ## Что должно попасть в релиз `v0.1.0-beta.8`
 
@@ -10,26 +10,34 @@
 
 ## Перед публикацией
 
-1. Убедитесь, что версия релиза совпадает в документации, release notes и git tag.
-2. Проверьте, что installer и portable-архив относятся к одному и тому же релизному билду.
-3. Убедитесь, что в portable-архиве лежат пользовательские файлы поставки, а installer ставит `protoswitch.exe`, ярлык запуска и uninstall entry.
-4. Проверьте, что README описывает текущий релизный сценарий без расхождений с фактической поставкой.
+1. Убедитесь, что версия релиза совпадает в документации, верхней записи `CHANGELOG.md`, `Cargo.toml` и git tag.
+2. Соберите артефакты:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-distribution.ps1`
+3. Прогоните portable smoke:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-portable.ps1`
+4. Прогоните installer smoke на чистой Windows-сессии без установленного ProtoSwitch:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-installer.ps1 -Mode CurrentUser`
+5. Если нужна проверка `machine-wide`, откройте повышенный PowerShell и запустите:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-installer.ps1 -Mode Both`
+6. Проверьте, что README описывает текущий релизный сценарий без расхождений с фактической поставкой.
+
+`smoke-installer.ps1` по умолчанию требует чистую машину: без уже установленного ProtoSwitch, без активного `protoswitch.exe`, без существующего `scheduled_task` или `startup_folder`. Это сделано специально, чтобы smoke не трогал рабочую установку пользователя. Ключ `-AllowDirtyEnvironment` оставлен только для одноразовых экспериментов в disposable-окружении.
 
 ## Публикация на GitHub Releases
 
-1. Создайте или откройте релиз с тегом нужной версии.
-2. Загрузите `ProtoSwitch-Setup-x64.exe`.
-3. Загрузите `protoswitch-portable-win-x64.zip`.
-4. Вставьте release notes на основе верхней записи в `CHANGELOG.md`.
-5. В тексте релиза явно укажите:
-   - что доступны installer и portable-вариант;
-   - что installer поддерживает `только для текущего пользователя` и `для всех пользователей`;
-   - что чекбокс автозапуска watcher включен по умолчанию;
-   - что если Scheduled Task не удалось создать, ProtoSwitch переходит на `startup_folder`;
-   - что обновление выполняется вручную через GitHub Releases.
-6. Опубликуйте релиз.
+1. Выполните scripted publish:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish-release.ps1`
+2. Скрипт сам:
+   - берет версию из `Cargo.toml`;
+   - ищет `ProtoSwitch-Setup-x64.exe` и `protoswitch-portable-win-x64.zip` в `dist\<version>`;
+   - вырезает верхнюю запись из `CHANGELOG.md`;
+   - пишет временный notes-файл в `UTF-8 without BOM`;
+   - вызывает `gh release create` или `gh release edit` только через `--notes-file`;
+   - перезаливает ассеты через `--clobber`, если релиз уже существует;
+   - делает self-check опубликованного `body` и падает, если в начале появился `U+FEFF`.
+3. Не вставляйте русские release notes вручную через буфер обмена и не передавайте их через `--notes`: именно это ломало кодировку в прошлых релизах.
 
-## Что указать в release notes
+## Что должно быть в верхней записи CHANGELOG
 
 - Названия обоих артефактов.
 - Что обычный запуск теперь открывает более спокойную terminal-first console с горячими клавишами для `switch`, `cleanup`, `doctor`, `settings`, `autostart` и `watcher`.
@@ -47,7 +55,8 @@
 1. Скачайте installer из опубликованного релиза и проверьте имя файла.
 2. Скачайте portable-архив и проверьте имя файла.
 3. Убедитесь, что release notes не противоречат `README.md` и `CHANGELOG.md`.
-4. Проверьте, что пользователь по описанию понимает:
+4. Ручной UI-check: на финальной странице installer по-прежнему должен быть чекбокс desktop shortcut. Silent smoke это не покрывает, потому что этот сценарий завязан на `postinstall` UI.
+5. Проверьте, что пользователь по описанию понимает:
    - какой артефакт выбрать;
    - как обновляться вручную;
    - что происходит с автозапуском;

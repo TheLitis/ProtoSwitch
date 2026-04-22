@@ -88,6 +88,12 @@ ProtoSwitch в `v0.1.0-beta.8` обновляется вручную через 
 Конфиг, runtime state и логи хранятся вне каталога установки, поэтому обычное обновление не должно их затронуть.
 
 Для оператора релиза есть отдельный файл [RELEASE-GUIDE.md](RELEASE-GUIDE.md).
+Рабочий flow теперь такой:
+
+- `scripts\build-distribution.ps1` собирает installer и portable-архив.
+- `scripts\smoke-portable.ps1` делает быстрый smoke portable-сборки.
+- `scripts\smoke-installer.ps1` прогоняет silent install/uninstall на чистой Windows-сессии и проверяет `doctor`, `status` и автозапуск.
+- `scripts\publish-release.ps1` публикует GitHub Release через `gh`, берет notes из верхней записи `CHANGELOG.md` и пишет временный UTF-8 notes-файл без BOM.
 
 ## Основные команды
 
