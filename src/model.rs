@@ -131,6 +131,7 @@ pub struct WatcherConfig {
     pub connect_timeout_secs: u64,
     pub failure_threshold: u32,
     pub history_size: usize,
+    pub auto_cleanup_dead_proxies: bool,
 }
 
 impl Default for WatcherConfig {
@@ -140,6 +141,7 @@ impl Default for WatcherConfig {
             connect_timeout_secs: 4,
             failure_threshold: 3,
             history_size: 6,
+            auto_cleanup_dead_proxies: true,
         }
     }
 }
@@ -352,6 +354,7 @@ mod tests {
         let mut config = AppConfig::default();
         config.autostart.enabled = true;
         config.autostart.method = AutostartMethod::StartupFolder;
+        config.watcher.auto_cleanup_dead_proxies = false;
         config.save(&paths.config_file).unwrap();
 
         let loaded_config = AppConfig::load(&paths).unwrap();
@@ -360,6 +363,7 @@ mod tests {
             loaded_config.autostart.method,
             AutostartMethod::StartupFolder
         );
+        assert!(!loaded_config.watcher.auto_cleanup_dead_proxies);
 
         let mut state = AppState::default();
         state.mark_failure();
