@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -5,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::{Duration as ChronoDuration, Local, Utc};
 use clap::Parser;
+use serde::Serialize;
 use sysinfo::{ProcessesToUpdate, System};
 
 use crate::cli::{
@@ -17,6 +19,19 @@ use crate::telegram;
 use crate::ui;
 use crate::windows;
 use crate::{APP_NAME, APP_VERSION};
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DoctorSnapshot {
+    pub app_version: String,
+    pub config_exists: bool,
+    pub state_exists: bool,
+    pub log_exists: bool,
+    pub tg_protocol_handler: Option<String>,
+    pub telegram_executable: Option<String>,
+    pub telegram_running: bool,
+    pub autostart: windows::AutostartStatus,
+    pub provider_probe: Result<String, String>,
+}
 
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -50,7 +65,7 @@ fn handle_launch(paths: &AppPaths) -> anyhow::Result<()> {
         )?;
     }
 
-    ensure_watcher_running(paths)?;
+    let _ = ensure_watcher_running(paths)?;
 
     handle_status(
         paths,
@@ -75,7 +90,7 @@ fn handle_init(paths: &AppPaths, args: InitArgs) -> anyhow::Result<()> {
         },
     });
 
-    let mut config = if args.non_interactive || !ui::stdout_is_terminal() {
+    let config = if args.non_interactive || !ui::stdout_is_terminal() {
         config
     } else {
         ui::run_setup(config)?
@@ -85,14 +100,8 @@ fn handle_init(paths: &AppPaths, args: InitArgs) -> anyhow::Result<()> {
         AppState::default().save(&paths.state_file)?;
     }
 
-    if config.autostart.enabled {
-        let method = windows::install_autostart(
-            &std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?,
-        )?;
-        config.autostart.method = method;
-    }
-
-    config.save(&paths.config_file)?;
+    persist_config_with_restart(paths, config, false)?;
+    let config = AppConfig::load(paths)?;
 
     let telegram_info = telegram::detect_installation()?;
     paths.append_log("init completed")?;
@@ -181,60 +190,16 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
 }
 
 fn handle_switch(paths: &AppPaths, args: SwitchArgs) -> anyhow::Result<()> {
-    let config = AppConfig::load(paths)?;
-    let provider = MtProtoProvider::new(config.provider.clone())?;
-    let mut state = AppState::load(paths)?;
-    let recent = state.recent_proxy_values();
-    let record = provider.fetch_candidate(&recent)?;
-
-    if args.dry_run {
-        println!("Новый proxy: {}", record.proxy.deep_link());
-        return Ok(());
-    }
-
-    telegram::open_proxy_link(&record.proxy)?;
-    state.current_proxy = Some(record.clone());
-    state.pending_proxy = None;
-    state.last_fetch_at = Some(record.captured_at);
-    state.last_apply_at = Some(Utc::now());
-    state.watcher.mode = WatcherMode::Switching;
-    state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
-    state.mark_healthy();
-    state.push_recent(record.clone(), config.watcher.history_size);
-    state.save(&paths.state_file)?;
-    paths.append_log(format!(
-        "manual switch applied {}",
-        record.proxy.short_label()
-    ))?;
-
-    println!("Применён proxy: {}", record.proxy.short_label());
+    println!("{}", switch_to_candidate(paths, args.dry_run)?);
     Ok(())
 }
 
 fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
-    let config = AppConfig::load(paths)?;
-    let provider = MtProtoProvider::new(config.provider.clone())?;
-    let installation = telegram::detect_installation()?;
-    let autostart = windows::query_autostart();
-    let provider_probe = provider
-        .fetch_candidate(&[])
-        .map(|record| record.proxy.short_label())
-        .map_err(|error| error.to_string());
-    let provider_probe_display = match &provider_probe {
+    let report = doctor_snapshot(paths)?;
+    let provider_probe_display = match &report.provider_probe {
         Ok(proxy) => format!("ok ({proxy})"),
         Err(error) => format!("error ({error})"),
     };
-    let report = serde_json::json!({
-        "app_version": APP_VERSION,
-        "config_exists": paths.config_file.exists(),
-        "state_exists": paths.state_file.exists(),
-        "log_exists": paths.log_file.exists(),
-        "tg_protocol_handler": installation.protocol_handler,
-        "telegram_executable": installation.executable_path.map(|path| path.display().to_string()),
-        "telegram_running": telegram::is_running().unwrap_or(false),
-        "autostart": autostart,
-        "provider_probe": provider_probe,
-    });
 
     if args.json {
         println!(
@@ -250,7 +215,7 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     println!("watch.log: {}", yes_no(paths.log_file.exists()));
     println!(
         "tg:// handler: {}",
-        if report["tg_protocol_handler"].is_null() {
+        if report.tg_protocol_handler.is_none() {
             "не найден"
         } else {
             "найден"
@@ -258,20 +223,19 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     );
     println!(
         "Telegram Desktop: {}",
-        report["telegram_executable"]
-            .as_str()
-            .unwrap_or("не найден")
+        report.telegram_executable.as_deref().unwrap_or("не найден")
     );
     println!(
         "Telegram запущен: {}",
-        yes_no(report["telegram_running"].as_bool().unwrap_or(false))
+        yes_no(report.telegram_running)
     );
     println!(
         "Автозапуск: {}",
-        if autostart.installed {
+        if report.autostart.installed {
             format!(
                 "да ({})",
-                autostart
+                report
+                    .autostart
                     .method
                     .as_ref()
                     .map(autostart_method_label)
@@ -281,7 +245,7 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
             "нет".to_string()
         }
     );
-    if let Some(target) = autostart.target {
+    if let Some(target) = report.autostart.target {
         println!("Цель автозапуска: {target}");
     }
     println!("mtproto.ru: {provider_probe_display}");
@@ -290,27 +254,12 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
 }
 
 fn handle_autostart(paths: &AppPaths, command: AutostartCommand) -> anyhow::Result<()> {
-    let mut config = AppConfig::load(paths)?;
-
     match command {
         AutostartCommand::Install => {
-            let method = windows::install_autostart(
-                &std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?,
-            )?;
-            config.autostart.enabled = true;
-            config.autostart.method = method.clone();
-            config.save(&paths.config_file)?;
-            println!(
-                "Автозапуск включён через {}.",
-                autostart_method_label(&method)
-            );
+            println!("{}", set_autostart_enabled(paths, true)?);
         }
         AutostartCommand::Remove => {
-            windows::remove_autostart()?;
-            config.autostart.enabled = false;
-            config.autostart.method = AutostartMethod::ScheduledTask;
-            config.save(&paths.config_file)?;
-            println!("Автозапуск выключен.");
+            println!("{}", set_autostart_enabled(paths, false)?);
         }
     }
 
@@ -509,7 +458,7 @@ fn print_plain_status(
     }
 }
 
-fn load_status_snapshot(
+pub(crate) fn load_status_snapshot(
     paths: &AppPaths,
 ) -> anyhow::Result<(AppConfig, AppState, windows::AutostartStatus)> {
     let config = AppConfig::load(paths)?;
@@ -519,14 +468,194 @@ fn load_status_snapshot(
     Ok((config, state, autostart))
 }
 
-fn ensure_watcher_running(paths: &AppPaths) -> anyhow::Result<()> {
+pub(crate) fn switch_to_candidate(paths: &AppPaths, dry_run: bool) -> anyhow::Result<String> {
+    let config = AppConfig::load(paths)?;
+    let provider = MtProtoProvider::new(config.provider.clone())?;
+    let mut state = AppState::load(paths)?;
+    let recent = state.recent_proxy_values();
+    let record = provider.fetch_candidate(&recent)?;
+
+    if dry_run {
+        return Ok(format!("Новый proxy: {}", record.proxy.deep_link()));
+    }
+
+    telegram::open_proxy_link(&record.proxy)?;
+    state.current_proxy = Some(record.clone());
+    state.pending_proxy = None;
+    state.last_fetch_at = Some(record.captured_at);
+    state.last_apply_at = Some(Utc::now());
+    state.watcher.mode = WatcherMode::Switching;
+    state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
+    state.mark_healthy();
+    state.push_recent(record.clone(), config.watcher.history_size);
+    state.save(&paths.state_file)?;
+    paths.append_log(format!(
+        "manual switch applied {}",
+        record.proxy.short_label()
+    ))?;
+
+    Ok(format!("Применён proxy: {}", record.proxy.short_label()))
+}
+
+pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
+    let mut state = AppState::load(paths)?;
+    let Some(record) = state.pending_proxy.clone() else {
+        return Err(anyhow::anyhow!("Нет pending proxy для применения"));
+    };
+
+    if !telegram::is_running().unwrap_or(false) {
+        return Err(anyhow::anyhow!("Telegram Desktop сейчас не запущен"));
+    }
+
+    let config = AppConfig::load(paths)?;
+    telegram::open_proxy_link(&record.proxy)?;
+    state.current_proxy = Some(record.clone());
+    state.pending_proxy = None;
+    state.last_apply_at = Some(Utc::now());
+    state.watcher.mode = WatcherMode::Switching;
+    state.watcher.telegram_running = true;
+    state.mark_healthy();
+    state.push_recent(record.clone(), config.watcher.history_size);
+    state.save(&paths.state_file)?;
+    paths.append_log(format!(
+        "pending proxy manually applied {}",
+        record.proxy.short_label()
+    ))?;
+
+    Ok(format!(
+        "Pending proxy применён: {}",
+        record.proxy.short_label()
+    ))
+}
+
+pub(crate) fn doctor_snapshot(paths: &AppPaths) -> anyhow::Result<DoctorSnapshot> {
+    let config = AppConfig::load(paths)?;
+    let provider = MtProtoProvider::new(config.provider.clone())?;
+    let installation = telegram::detect_installation()?;
+    let autostart = windows::query_autostart();
+    let provider_probe = provider
+        .fetch_candidate(&[])
+        .map(|record| record.proxy.short_label())
+        .map_err(|error| error.to_string());
+
+    Ok(DoctorSnapshot {
+        app_version: APP_VERSION.to_string(),
+        config_exists: paths.config_file.exists(),
+        state_exists: paths.state_file.exists(),
+        log_exists: paths.log_file.exists(),
+        tg_protocol_handler: installation.protocol_handler,
+        telegram_executable: installation
+            .executable_path
+            .map(|path| path.display().to_string()),
+        telegram_running: telegram::is_running().unwrap_or(false),
+        autostart,
+        provider_probe,
+    })
+}
+
+pub(crate) fn set_autostart_enabled(paths: &AppPaths, enabled: bool) -> anyhow::Result<String> {
+    let mut config = AppConfig::load(paths)?;
+    config.autostart.enabled = enabled;
+    persist_config_with_restart(paths, config, false)
+}
+
+pub(crate) fn persist_config(paths: &AppPaths, config: AppConfig) -> anyhow::Result<String> {
+    persist_config_with_restart(paths, config, true)
+}
+
+fn persist_config_with_restart(
+    paths: &AppPaths,
+    mut config: AppConfig,
+    restart_watcher: bool,
+) -> anyhow::Result<String> {
+    if config.autostart.enabled {
+        let method = windows::install_autostart(
+            &std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?,
+        )?;
+        config.autostart.method = method;
+    } else {
+        let _ = windows::remove_autostart();
+        config.autostart.method = AutostartMethod::ScheduledTask;
+    }
+
+    config.save(&paths.config_file)?;
+    if restart_watcher {
+        let _ = restart_background_watcher(paths);
+    }
+
+    Ok(if config.autostart.enabled {
+        format!(
+            "Настройки сохранены. Автозапуск: вкл ({})",
+            autostart_method_label(&config.autostart.method)
+        )
+    } else {
+        "Настройки сохранены. Автозапуск: выкл".to_string()
+    })
+}
+
+pub(crate) fn ensure_watcher_running(paths: &AppPaths) -> anyhow::Result<bool> {
     let config = AppConfig::load(paths)?;
     let state = AppState::load(paths)?;
 
     if watcher_is_recent(&config, &state) || watcher_process_exists() {
-        return Ok(());
+        return Ok(false);
     }
 
+    spawn_background_watcher(paths)?;
+    Ok(true)
+}
+
+pub(crate) fn stop_background_watcher(paths: &AppPaths) -> anyhow::Result<usize> {
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    let current_pid = std::process::id();
+    let mut stopped = 0usize;
+
+    for process in system.processes().values() {
+        if process.pid().as_u32() == current_pid {
+            continue;
+        }
+
+        let name = process.name().to_string_lossy().to_ascii_lowercase();
+        if name != "protoswitch.exe" && name != "protoswitch" {
+            continue;
+        }
+
+        let commandline = process
+            .cmd()
+            .iter()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+
+        let is_headless_watcher = commandline.iter().any(|value| value == "watch")
+            && commandline.iter().any(|value| value == "--headless");
+
+        if is_headless_watcher && process.kill() {
+            stopped += 1;
+        }
+    }
+
+    let mut state = AppState::load(paths)?;
+    state.watcher.mode = WatcherMode::Idle;
+    state.watcher.last_check_at = None;
+    state.watcher.next_check_at = None;
+    state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
+    state.save(&paths.state_file)?;
+
+    Ok(stopped)
+}
+
+pub(crate) fn restart_background_watcher(paths: &AppPaths) -> anyhow::Result<String> {
+    let stopped = stop_background_watcher(paths)?;
+    spawn_background_watcher(paths)?;
+    Ok(if stopped == 0 {
+        "Watcher запущен в новом сеансе.".to_string()
+    } else {
+        format!("Watcher перезапущен. Остановлено: {stopped}")
+    })
+}
+
+fn spawn_background_watcher(paths: &AppPaths) -> anyhow::Result<()> {
     let executable =
         std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?;
     let mut command = Command::new(executable);
@@ -544,7 +673,7 @@ fn ensure_watcher_running(paths: &AppPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn watcher_is_recent(config: &AppConfig, state: &AppState) -> bool {
+pub(crate) fn watcher_is_recent(config: &AppConfig, state: &AppState) -> bool {
     let Some(last_check_at) = state.watcher.last_check_at else {
         return false;
     };
@@ -558,7 +687,7 @@ fn watcher_is_recent(config: &AppConfig, state: &AppState) -> bool {
     Utc::now() - last_check_at < threshold
 }
 
-fn watcher_process_exists() -> bool {
+pub(crate) fn watcher_process_exists() -> bool {
     let mut system = System::new_all();
     system.refresh_processes(ProcessesToUpdate::All, true);
     let current_pid = std::process::id();
@@ -582,6 +711,22 @@ fn watcher_process_exists() -> bool {
         commandline.iter().any(|value| value == "watch")
             && commandline.iter().any(|value| value == "--headless")
     })
+}
+
+pub(crate) fn open_in_shell(path: &Path) -> anyhow::Result<()> {
+    Command::new("explorer")
+        .arg(path)
+        .spawn()
+        .with_context(|| format!("Не удалось открыть {}", path.display()))?;
+    Ok(())
+}
+
+pub(crate) fn open_in_notepad(path: &Path) -> anyhow::Result<()> {
+    Command::new("notepad")
+        .arg(path)
+        .spawn()
+        .with_context(|| format!("Не удалось открыть {}", path.display()))?;
+    Ok(())
 }
 
 fn format_local_time(timestamp: &chrono::DateTime<Utc>) -> String {

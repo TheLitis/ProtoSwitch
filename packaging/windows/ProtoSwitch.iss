@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0-beta.6"
+  #define AppVersion "0.1.0-beta.7"
 #endif
 #ifndef RepoRoot
   #error RepoRoot must be defined.
@@ -37,6 +37,7 @@ SetupLogging=yes
 OutputDir={#OutputDir}
 OutputBaseFilename=ProtoSwitch-Setup-x64
 UninstallDisplayIcon={app}\protoswitch.exe
+SetupIconFile={#RepoRoot}\assets\windows\protoswitch.ico
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -51,7 +52,7 @@ Source: "{#RepoRoot}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\packaging\windows\QUICKSTART.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\ProtoSwitch"; Filename: "{app}\protoswitch.exe"
+Name: "{autoprograms}\ProtoSwitch"; Filename: "{app}\protoswitch.exe"; IconFilename: "{app}\protoswitch.exe"
 Name: "{autoprograms}\Удалить ProtoSwitch"; Filename: "{uninstallexe}"
 
 [Run]

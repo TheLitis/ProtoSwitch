@@ -68,7 +68,9 @@ pub fn remove_autostart() -> anyhow::Result<()> {
 
 #[cfg(windows)]
 pub fn query_autostart() -> AutostartStatus {
+    let _ = migrate_legacy_startup_launcher();
     let startup_path = startup_launcher_path().ok();
+    let legacy_path = legacy_startup_script_path().ok();
 
     if query_scheduled_task().is_some() {
         return AutostartStatus {
@@ -79,6 +81,16 @@ pub fn query_autostart() -> AutostartStatus {
     }
 
     if let Some(path) = startup_path {
+        if path.exists() {
+            return AutostartStatus {
+                installed: true,
+                method: Some(AutostartMethod::StartupFolder),
+                target: Some(path.display().to_string()),
+            };
+        }
+    }
+
+    if let Some(path) = legacy_path {
         if path.exists() {
             return AutostartStatus {
                 installed: true,
@@ -134,8 +146,27 @@ fn query_scheduled_task() -> Option<Output> {
 #[cfg(windows)]
 fn install_startup_launcher(executable: &Path) -> anyhow::Result<()> {
     let path = startup_launcher_path()?;
-    let body = startup_launcher_body(executable);
-    fs::write(&path, body).with_context(|| format!("Не удалось записать {}", path.display()))?;
+    let _ = remove_legacy_startup_script();
+    let script = startup_shortcut_script(executable, &path);
+    let status = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .status()
+        .context("Не удалось запустить PowerShell для создания startup shortcut")?;
+
+    if !status.success() {
+        return Err(anyhow!(
+            "PowerShell не смог создать startup shortcut {}",
+            path.display()
+        ));
+    }
+
     Ok(())
 }
 
@@ -159,7 +190,7 @@ fn remove_startup_launcher() -> anyhow::Result<()> {
     if path.exists() {
         fs::remove_file(&path).with_context(|| format!("Не удалось удалить {}", path.display()))?;
     }
-    Ok(())
+    remove_legacy_startup_script()
 }
 
 #[cfg(windows)]
@@ -171,15 +202,80 @@ fn startup_launcher_path() -> anyhow::Result<PathBuf> {
         .join("Start Menu")
         .join("Programs")
         .join("Startup")
+        .join("ProtoSwitch.lnk"))
+}
+
+#[cfg(windows)]
+fn legacy_startup_script_path() -> anyhow::Result<PathBuf> {
+    let appdata = env::var("APPDATA").context("APPDATA не найден")?;
+    Ok(PathBuf::from(appdata)
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join("Startup")
         .join("ProtoSwitch.cmd"))
 }
 
 #[cfg(windows)]
-fn startup_launcher_body(executable: &Path) -> String {
+fn remove_legacy_startup_script() -> anyhow::Result<()> {
+    let legacy = legacy_startup_script_path()?;
+    if legacy.exists() {
+        fs::remove_file(&legacy)
+            .with_context(|| format!("Не удалось удалить {}", legacy.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn migrate_legacy_startup_launcher() -> anyhow::Result<()> {
+    let shortcut = startup_launcher_path()?;
+    let legacy = legacy_startup_script_path()?;
+
+    if shortcut.exists() {
+        return remove_legacy_startup_script();
+    }
+
+    if legacy.exists() {
+        let executable =
+            std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?;
+        install_startup_launcher(&executable)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn startup_shortcut_script(executable: &Path, shortcut_path: &Path) -> String {
+    let executable_value = executable.display().to_string();
+    let shortcut_path = ps_literal(shortcut_path.display().to_string());
+    let working_dir = ps_literal(
+        executable
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .display()
+            .to_string(),
+    );
+    let powershell_path = ps_literal("powershell.exe".to_string());
+    let arguments = ps_literal(startup_launcher_arguments(&executable_value));
+    let icon_location = ps_literal(format!("{},0", executable_value));
+
     format!(
-        "@echo off\r\npowershell -NoProfile -WindowStyle Hidden -Command \"Start-Process -WindowStyle Hidden -FilePath '{}' -ArgumentList 'watch --headless'\"\r\n",
-        executable.display()
+        "$ErrorActionPreference = 'Stop'\n$ws = New-Object -ComObject WScript.Shell\n$shortcut = $ws.CreateShortcut({shortcut_path})\n$shortcut.TargetPath = {powershell_path}\n$shortcut.Arguments = {arguments}\n$shortcut.WorkingDirectory = {working_dir}\n$shortcut.IconLocation = {icon_location}\n$shortcut.WindowStyle = 7\n$shortcut.Save()\n",
     )
+}
+
+#[cfg(windows)]
+fn startup_launcher_arguments(executable: &str) -> String {
+    format!(
+        "-NoProfile -WindowStyle Hidden -Command \"Start-Process -WindowStyle Hidden -FilePath '{}' -ArgumentList 'watch --headless'\"",
+        executable.replace('\'', "''")
+    )
+}
+
+#[cfg(windows)]
+fn ps_literal(value: String) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[cfg(windows)]
@@ -219,9 +315,15 @@ mod tests {
     }
 
     #[test]
-    fn startup_script_contains_hidden_process_launch() {
-        let body = startup_launcher_body(Path::new(r"C:\Tools\protoswitch.exe"));
-        assert!(body.contains("Start-Process -WindowStyle Hidden"));
-        assert!(body.contains("watch --headless"));
+    fn startup_shortcut_uses_hidden_powershell_launch() {
+        let args = startup_launcher_arguments(r"C:\Tools\protoswitch.exe");
+        assert!(args.contains("Start-Process -WindowStyle Hidden"));
+        assert!(args.contains("watch --headless"));
+    }
+
+    #[test]
+    fn startup_shortcut_path_uses_lnk_extension() {
+        let path = startup_launcher_path().unwrap();
+        assert_eq!(path.extension().and_then(|value| value.to_str()), Some("lnk"));
     }
 }
