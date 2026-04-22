@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use sysinfo::{ProcessesToUpdate, System};
 
-use crate::model::MtProtoProxy;
+use crate::model::{MtProtoProxy, ProxyKind};
 
 #[cfg(windows)]
 use winreg::RegKey;
@@ -36,9 +36,12 @@ pub fn is_running() -> anyhow::Result<bool> {
 
 pub fn check_proxy(proxy: &MtProtoProxy, timeout_secs: u64) -> bool {
     let timeout = Duration::from_secs(timeout_secs.max(1));
-    resolve_socket_addr(&proxy.server, proxy.port)
-        .and_then(|addr| TcpStream::connect_timeout(&addr, timeout).ok())
-        .is_some()
+    match proxy.kind {
+        ProxyKind::MtProto => resolve_socket_addr(&proxy.server, proxy.port)
+            .and_then(|addr| TcpStream::connect_timeout(&addr, timeout).ok())
+            .is_some(),
+        ProxyKind::Socks5 => check_socks5_proxy(proxy, timeout),
+    }
 }
 
 #[cfg(windows)]
@@ -63,7 +66,7 @@ pub fn probe_proxy_status(
     proxy: &MtProtoProxy,
     timeout_secs: u64,
 ) -> anyhow::Result<ManagedProxyStatus> {
-    let output = run_hidden_powershell_output(&probe_proxy_status_command(proxy, timeout_secs))
+    let output = run_hidden_powershell_output(&probe_proxy_status_command_v2(proxy, timeout_secs))
         .context("Не удалось вызвать PowerShell для проверки proxy в Telegram")?;
 
     if !output.status.success() {
@@ -114,7 +117,7 @@ pub fn remove_proxies(proxies: &[MtProtoProxy]) -> anyhow::Result<usize> {
         return Ok(0);
     }
 
-    let output = run_hidden_powershell_output(&cleanup_proxies_command(proxies))
+    let output = run_hidden_powershell_output(&cleanup_proxies_command_v2(proxies))
         .context("Не удалось вызвать PowerShell для очистки proxy в Telegram")?;
 
     if !output.status.success() {
@@ -149,6 +152,80 @@ pub fn detect_installation() -> anyhow::Result<TelegramInstallation> {
 
 fn resolve_socket_addr(server: &str, port: u16) -> Option<SocketAddr> {
     (server, port).to_socket_addrs().ok()?.next()
+}
+
+fn check_socks5_proxy(proxy: &MtProtoProxy, timeout: Duration) -> bool {
+    let Some(addr) = resolve_socket_addr(&proxy.server, proxy.port) else {
+        return false;
+    };
+
+    let mut stream = match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let uses_auth = proxy
+        .username
+        .as_ref()
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+        || proxy
+            .password
+            .as_ref()
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+
+    let greeting = if uses_auth {
+        [0x05_u8, 0x01, 0x02]
+    } else {
+        [0x05_u8, 0x01, 0x00]
+    };
+
+    if std::io::Write::write_all(&mut stream, &greeting).is_err() {
+        return false;
+    }
+
+    let mut response = [0_u8; 2];
+    if std::io::Read::read_exact(&mut stream, &mut response).is_err() {
+        return false;
+    }
+
+    if response[0] != 0x05 {
+        return false;
+    }
+
+    if uses_auth {
+        if response[1] != 0x02 {
+            return false;
+        }
+        let username = proxy.username.clone().unwrap_or_default().into_bytes();
+        let password = proxy.password.clone().unwrap_or_default().into_bytes();
+        if username.len() > u8::MAX as usize || password.len() > u8::MAX as usize {
+            return false;
+        }
+
+        let mut payload = Vec::with_capacity(3 + username.len() + password.len());
+        payload.push(0x01);
+        payload.push(username.len() as u8);
+        payload.extend_from_slice(&username);
+        payload.push(password.len() as u8);
+        payload.extend_from_slice(&password);
+        if std::io::Write::write_all(&mut stream, &payload).is_err() {
+            return false;
+        }
+
+        let mut auth_response = [0_u8; 2];
+        if std::io::Read::read_exact(&mut stream, &mut auth_response).is_err() {
+            return false;
+        }
+
+        auth_response == [0x01, 0x00]
+    } else {
+        response[1] == 0x00
+    }
 }
 
 fn parse_probe_status_line(line: &str) -> anyhow::Result<ManagedProxyStatus> {
@@ -349,7 +426,7 @@ exit 1"#;
     script.replace("__LINK__", &ps_literal(value))
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn probe_proxy_status_command(proxy: &MtProtoProxy, timeout_secs: u64) -> String {
     let timeout_ms = (timeout_secs.max(3) + 3).saturating_mul(1_000).to_string();
     let script = r#"$ErrorActionPreference = 'Stop'
@@ -379,8 +456,8 @@ function Restore-PreviousWindow($handle) {
   [ProtoSwitchNative]::ShowWindowAsync($handle, 9) | Out-Null
   [ProtoSwitchNative]::SetForegroundWindow($handle) | Out-Null
 }
-function Normalize-Key($server, $port, $secret) {
-  ('{0}:{1}:{2}' -f $server, $port, $secret).ToLowerInvariant()
+function Normalize-Key($kind, $server, $port, $secret, $user, $pass) {
+  ('{0}:{1}:{2}:{3}:{4}:{5}' -f $kind, $server, $port, $secret, $user, $pass).ToLowerInvariant()
 }
 function Get-MainWindow() {
   $proc = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -559,7 +636,7 @@ function Get-StatusResult($labels) {
   }
   return 'unknown:' + $labels
 }
-$targetKey = Normalize-Key __SERVER__ '__PORT__' __SECRET__
+$targetKey = Normalize-Key __KIND__ '__SERVER__' '__PORT__' __SECRET__ __USER__ __PASS__
 $previous = [ProtoSwitchNative]::GetForegroundWindow()
 Start-Process 'tg://settings/data_and_storage/proxy/settings'
 $box = Wait-ForClass 'class `anonymous namespace''::ProxiesBox' 6000
@@ -608,11 +685,14 @@ exit 0"#;
     script
         .replace("__SERVER__", &ps_literal(&proxy.server))
         .replace("__PORT__", &proxy.port.to_string())
-        .replace("__SECRET__", &ps_literal(&proxy.secret))
+        .replace(
+            "__SECRET__",
+            &ps_literal(proxy.secret.as_deref().unwrap_or_default()),
+        )
         .replace("__TIMEOUT_MS__", &timeout_ms)
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn cleanup_proxies_command(proxies: &[MtProtoProxy]) -> String {
     let payload = serde_json::to_string(proxies).unwrap_or_else(|_| "[]".to_string());
     let script = r#"$ErrorActionPreference = 'Stop'
@@ -863,6 +943,538 @@ exit 0"#;
 }
 
 #[cfg(windows)]
+fn probe_proxy_status_command_v2(proxy: &MtProtoProxy, timeout_secs: u64) -> String {
+    let timeout_ms = (timeout_secs.max(3) + 3).saturating_mul(1_000).to_string();
+    let script = r#"$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ProtoSwitchNative {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+}
+"@
+function Invoke-Element($element) {
+  $pattern = $null
+  if ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    return $true
+  }
+  return $false
+}
+function Restore-PreviousWindow($handle) {
+  if ($handle -eq [IntPtr]::Zero) {
+    return
+  }
+  Start-Sleep -Milliseconds 120
+  [ProtoSwitchNative]::ShowWindowAsync($handle, 9) | Out-Null
+  [ProtoSwitchNative]::SetForegroundWindow($handle) | Out-Null
+}
+function Normalize-Key($kind, $server, $port, $secret, $user, $pass) {
+  ('{0}:{1}:{2}:{3}:{4}:{5}' -f $kind, $server, $port, $secret, $user, $pass).ToLowerInvariant()
+}
+function Get-MainWindow() {
+  $proc = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {
+    return $null
+  }
+  [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$proc.MainWindowHandle)
+}
+function Wait-ForClass($className, $timeoutMs) {
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $main = Get-MainWindow
+    if ($null -eq $main) {
+      Start-Sleep -Milliseconds 120
+      continue
+    }
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+      $className
+    )
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+    $items = $main.FindAll($scope, $cond)
+    for ($i = 0; $i -lt $items.Count; $i++) {
+      $candidate = $items.Item($i)
+      if (-not $candidate.Current.IsOffscreen) {
+        return [PSCustomObject]@{ Main = $main; Element = $candidate }
+      }
+    }
+    Start-Sleep -Milliseconds 120
+  }
+  return $null
+}
+function Get-VisibleProxyRows($main) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class `anonymous namespace''::ProxyRow'
+  )
+  $rows = $main.FindAll($scope, $cond)
+  $result = @()
+  for ($i = 0; $i -lt $rows.Count; $i++) {
+    $row = $rows.Item($i)
+    if ($row.Current.IsOffscreen) {
+      continue
+    }
+    $result += [PSCustomObject]@{
+      Element = $row
+      Y = [int]$row.Current.BoundingRectangle.Y
+    }
+  }
+  $result | Sort-Object Y
+}
+function Get-TextSnapshot($element) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Text
+  )
+  $items = $element.FindAll($scope, $cond)
+  $values = @()
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $name = $items.Item($i).Current.Name
+    if (-not [string]::IsNullOrWhiteSpace($name)) {
+      $values += $name
+    }
+  }
+  ($values -join ' | ')
+}
+function Get-RowMenuButton($main, $rowY) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::IconButton'
+  )
+  $buttons = $main.FindAll($scope, $cond)
+  $target = $null
+  $bestDistance = 99999
+  for ($i = 0; $i -lt $buttons.Count; $i++) {
+    $button = $buttons.Item($i)
+    if ($button.Current.IsOffscreen) {
+      continue
+    }
+    $distance = [math]::Abs([int]$button.Current.BoundingRectangle.Y - [int]$rowY)
+    if ($distance -le 8 -and $distance -lt $bestDistance) {
+      $target = $button
+      $bestDistance = $distance
+    }
+  }
+  $target
+}
+function Get-MenuItemByNames($main, $names) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::MenuItem
+  )
+  $items = $main.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $item = $items.Item($i)
+    if ($item.Current.IsOffscreen) {
+      continue
+    }
+    foreach ($name in $names) {
+      if ($item.Current.Name -eq $name) {
+        return $item
+      }
+    }
+  }
+  return $null
+}
+function Get-EditorValue($editor, $names) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Edit
+  )
+  $items = $editor.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $item = $items.Item($i)
+    foreach ($name in $names) {
+      if ($item.Current.Name -eq $name) {
+        $pattern = $null
+        if ($item.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+          return ([System.Windows.Automation.ValuePattern]$pattern).Current.Value
+        }
+      }
+    }
+  }
+  return ''
+}
+function Close-Editor($main) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::RoundButton'
+  )
+  $buttons = $main.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $buttons.Count; $i++) {
+    $button = $buttons.Item($i)
+    if ($button.Current.IsOffscreen) {
+      continue
+    }
+    if ($button.Current.Name -match 'Cancel|РћС‚РјРµРЅР°|Close|Р—Р°РєСЂС‹С‚СЊ') {
+      Invoke-Element $button | Out-Null
+      Start-Sleep -Milliseconds 150
+      return
+    }
+  }
+}
+function Open-RowEditor($main, $rowY) {
+  $menu = Get-RowMenuButton $main $rowY
+  if ($null -eq $menu -or -not (Invoke-Element $menu)) {
+    return $null
+  }
+  Start-Sleep -Milliseconds 180
+  $edit = Get-MenuItemByNames $main @('Edit', 'Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ')
+  if ($null -eq $edit -or -not (Invoke-Element $edit)) {
+    return $null
+  }
+  Start-Sleep -Milliseconds 220
+  Wait-ForClass 'class `anonymous namespace''::ProxyBox' 1800
+}
+function Get-StatusResult($labels) {
+  $normalized = $labels.ToLowerInvariant()
+  if ($normalized -match 'not available|РЅРµРґРѕСЃС‚СѓРї|РЅРµ РґРѕСЃС‚СѓРїРµРЅ') {
+    return 'unavailable:' + $labels
+  }
+  if ($normalized -match 'checking|РїСЂРѕРІРµСЂ') {
+    return 'checking:' + $labels
+  }
+  if ($normalized -match 'available|connected|online|РґРѕСЃС‚СѓРї|РїРѕРґРєР»СЋС‡') {
+    return 'available:' + $labels
+  }
+  if ([string]::IsNullOrWhiteSpace($labels)) {
+    return 'unknown:row found'
+  }
+  return 'unknown:' + $labels
+}
+$targetKey = Normalize-Key __KIND__ '__SERVER__' '__PORT__' __SECRET__ __USER__ __PASS__
+$previous = [ProtoSwitchNative]::GetForegroundWindow()
+Start-Process 'tg://settings/data_and_storage/proxy/settings'
+$box = Wait-ForClass 'class `anonymous namespace''::ProxiesBox' 6000
+if ($null -eq $box) {
+  Restore-PreviousWindow $previous
+  exit 1
+}
+Restore-PreviousWindow $previous
+$deadline = [DateTime]::UtcNow.AddMilliseconds(__TIMEOUT_MS__)
+$best = 'missing:not found'
+while ([DateTime]::UtcNow -lt $deadline) {
+  $main = Get-MainWindow
+  if ($null -eq $main) {
+    Start-Sleep -Milliseconds 250
+    continue
+  }
+  $rows = Get-VisibleProxyRows $main
+  foreach ($row in $rows) {
+    $labels = Get-TextSnapshot $row.Element
+    $editor = Open-RowEditor $main $row.Y
+    if ($null -eq $editor) {
+      continue
+    }
+    $server = Get-EditorValue $editor.Element @('Hostname', 'Host', 'Server', 'РЎРµСЂРІРµСЂ')
+    $port = Get-EditorValue $editor.Element @('Port')
+    $secret = Get-EditorValue $editor.Element @('Secret', 'РЎРµРєСЂРµС‚')
+    $user = Get-EditorValue $editor.Element @('Username', 'User', 'Login', 'Логин', 'Имя пользователя')
+    $pass = Get-EditorValue $editor.Element @('Password', 'Pass', 'Пароль')
+    Close-Editor $editor.Main
+    if ([string]::IsNullOrWhiteSpace($server) -or [string]::IsNullOrWhiteSpace($port)) {
+      continue
+    }
+    $kind = if ([string]::IsNullOrWhiteSpace($secret)) { 'socks5' } else { 'mtproto' }
+    $rowKey = Normalize-Key $kind $server $port $secret $user $pass
+    if ($rowKey -ne $targetKey) {
+      continue
+    }
+    $best = Get-StatusResult $labels
+    if ($best.StartsWith('available:') -or $best.StartsWith('unavailable:')) {
+      Write-Output $best
+      exit 0
+    }
+  }
+  Start-Sleep -Milliseconds 350
+}
+Write-Output $best
+exit 0"#;
+
+    script
+        .replace(
+            "__KIND__",
+            match proxy.kind {
+                ProxyKind::MtProto => "'mtproto'",
+                ProxyKind::Socks5 => "'socks5'",
+            },
+        )
+        .replace("__SERVER__", &ps_literal(&proxy.server))
+        .replace("__PORT__", &proxy.port.to_string())
+        .replace("__SECRET__", &ps_literal(proxy.secret.as_deref().unwrap_or("")))
+        .replace("__USER__", &ps_literal(proxy.username.as_deref().unwrap_or("")))
+        .replace("__PASS__", &ps_literal(proxy.password.as_deref().unwrap_or("")))
+        .replace("__TIMEOUT_MS__", &timeout_ms)
+}
+
+#[cfg(windows)]
+fn cleanup_proxies_command_v2(proxies: &[MtProtoProxy]) -> String {
+    let payload = serde_json::to_string(proxies).unwrap_or_else(|_| "[]".to_string());
+    let script = r#"$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ProtoSwitchNative {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+}
+"@
+function Invoke-Element($element) {
+  $pattern = $null
+  if ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+    ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+    return $true
+  }
+  return $false
+}
+function Restore-PreviousWindow($handle) {
+  if ($handle -eq [IntPtr]::Zero) {
+    return
+  }
+  Start-Sleep -Milliseconds 120
+  [ProtoSwitchNative]::ShowWindowAsync($handle, 9) | Out-Null
+  [ProtoSwitchNative]::SetForegroundWindow($handle) | Out-Null
+}
+function Get-MainWindow() {
+  $proc = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {
+    return $null
+  }
+  [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$proc.MainWindowHandle)
+}
+function Wait-ForClass($className, $timeoutMs) {
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $main = Get-MainWindow
+    if ($null -eq $main) {
+      Start-Sleep -Milliseconds 120
+      continue
+    }
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+      $className
+    )
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+    $items = $main.FindAll($scope, $cond)
+    for ($i = 0; $i -lt $items.Count; $i++) {
+      $candidate = $items.Item($i)
+      if (-not $candidate.Current.IsOffscreen) {
+        return [PSCustomObject]@{ Main = $main; Element = $candidate }
+      }
+    }
+    Start-Sleep -Milliseconds 120
+  }
+  return $null
+}
+function Normalize-Key($kind, $server, $port, $secret, $user, $pass) {
+  ('{0}:{1}:{2}:{3}:{4}:{5}' -f $kind, $server, $port, $secret, $user, $pass).ToLowerInvariant()
+}
+function Get-VisibleProxyRows($main) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class `anonymous namespace''::ProxyRow'
+  )
+  $rows = $main.FindAll($scope, $cond)
+  $result = @()
+  for ($i = 0; $i -lt $rows.Count; $i++) {
+    $row = $rows.Item($i)
+    if ($row.Current.IsOffscreen) {
+      continue
+    }
+    $result += [PSCustomObject]@{
+      Element = $row
+      Y = [int]$row.Current.BoundingRectangle.Y
+    }
+  }
+  $result | Sort-Object Y
+}
+function Get-RowMenuButton($main, $rowY) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::IconButton'
+  )
+  $buttons = $main.FindAll($scope, $cond)
+  $target = $null
+  $bestDistance = 99999
+  for ($i = 0; $i -lt $buttons.Count; $i++) {
+    $button = $buttons.Item($i)
+    if ($button.Current.IsOffscreen) {
+      continue
+    }
+    $distance = [math]::Abs([int]$button.Current.BoundingRectangle.Y - [int]$rowY)
+    if ($distance -le 8 -and $distance -lt $bestDistance) {
+      $target = $button
+      $bestDistance = $distance
+    }
+  }
+  $target
+}
+function Get-MenuItemByNames($main, $names) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::MenuItem
+  )
+  $items = $main.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $item = $items.Item($i)
+    if ($item.Current.IsOffscreen) {
+      continue
+    }
+    foreach ($name in $names) {
+      if ($item.Current.Name -eq $name) {
+        return $item
+      }
+    }
+  }
+  return $null
+}
+function Get-EditorValue($editor, $names) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Edit
+  )
+  $items = $editor.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $items.Count; $i++) {
+    $item = $items.Item($i)
+    foreach ($name in $names) {
+      if ($item.Current.Name -eq $name) {
+        $pattern = $null
+        if ($item.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+          return ([System.Windows.Automation.ValuePattern]$pattern).Current.Value
+        }
+      }
+    }
+  }
+  return ''
+}
+function Close-Editor($main) {
+  $scope = [System.Windows.Automation.TreeScope]::Descendants
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+    'class Ui::RoundButton'
+  )
+  $buttons = $main.FindAll($scope, $cond)
+  for ($i = 0; $i -lt $buttons.Count; $i++) {
+    $button = $buttons.Item($i)
+    if ($button.Current.IsOffscreen) {
+      continue
+    }
+    if ($button.Current.Name -match 'Cancel|РћС‚РјРµРЅР°|Close|Р—Р°РєСЂС‹С‚СЊ') {
+      Invoke-Element $button | Out-Null
+      Start-Sleep -Milliseconds 150
+      return
+    }
+  }
+}
+$targets = ConvertFrom-Json __PAYLOAD__
+if ($null -eq $targets -or $targets.Count -eq 0) {
+  Write-Output 0
+  exit 0
+}
+$remaining = @{}
+foreach ($target in $targets) {
+  $kind = if ($target.kind -eq 'socks5') { 'socks5' } else { 'mtproto' }
+  $secret = if ($null -eq $target.secret) { '' } else { $target.secret }
+  $user = if ($null -eq $target.username) { '' } else { $target.username }
+  $pass = if ($null -eq $target.password) { '' } else { $target.password }
+  $key = Normalize-Key $kind $target.server $target.port $secret $user $pass
+  $remaining[$key] = $true
+}
+$previous = [ProtoSwitchNative]::GetForegroundWindow()
+Start-Process 'tg://settings/data_and_storage/proxy/settings'
+$box = Wait-ForClass 'class `anonymous namespace''::ProxiesBox' 6000
+if ($null -eq $box) {
+  Restore-PreviousWindow $previous
+  exit 1
+}
+Restore-PreviousWindow $previous
+$removed = 0
+for ($passIndex = 0; $passIndex -lt 12 -and $remaining.Count -gt 0; $passIndex++) {
+  $main = Get-MainWindow
+  if ($null -eq $main) {
+    break
+  }
+  $rows = Get-VisibleProxyRows $main
+  $deleted = $false
+  foreach ($row in $rows) {
+    $main = Get-MainWindow
+    if ($null -eq $main) {
+      break
+    }
+    $menu = Get-RowMenuButton $main $row.Y
+    if ($null -eq $menu -or -not (Invoke-Element $menu)) {
+      continue
+    }
+    Start-Sleep -Milliseconds 180
+    $edit = Get-MenuItemByNames $main @('Edit', 'Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ')
+    if ($null -eq $edit -or -not (Invoke-Element $edit)) {
+      continue
+    }
+    Start-Sleep -Milliseconds 220
+    $editor = Wait-ForClass 'class `anonymous namespace''::ProxyBox' 1800
+    if ($null -eq $editor) {
+      continue
+    }
+    $server = Get-EditorValue $editor.Element @('Hostname', 'Host', 'Server', 'РЎРµСЂРІРµСЂ')
+    $port = Get-EditorValue $editor.Element @('Port')
+    $secret = Get-EditorValue $editor.Element @('Secret', 'РЎРµРєСЂРµС‚')
+    $user = Get-EditorValue $editor.Element @('Username', 'User', 'Login', 'Логин', 'Имя пользователя')
+    $pass = Get-EditorValue $editor.Element @('Password', 'Pass', 'Пароль')
+    Close-Editor $editor.Main
+    if ([string]::IsNullOrWhiteSpace($server) -or [string]::IsNullOrWhiteSpace($port)) {
+      continue
+    }
+    $kind = if ([string]::IsNullOrWhiteSpace($secret)) { 'socks5' } else { 'mtproto' }
+    $key = Normalize-Key $kind $server $port $secret $user $pass
+    if (-not $remaining.ContainsKey($key)) {
+      continue
+    }
+    $main = Get-MainWindow
+    if ($null -eq $main) {
+      break
+    }
+    $menu = Get-RowMenuButton $main $row.Y
+    if ($null -eq $menu -or -not (Invoke-Element $menu)) {
+      continue
+    }
+    Start-Sleep -Milliseconds 180
+    $delete = Get-MenuItemByNames $main @('Delete', 'РЈРґР°Р»РёС‚СЊ')
+    if ($null -eq $delete -or -not (Invoke-Element $delete)) {
+      continue
+    }
+    $remaining.Remove($key) | Out-Null
+    $removed++
+    $deleted = $true
+    Start-Sleep -Milliseconds 220
+    break
+  }
+  if (-not $deleted) {
+    break
+  }
+}
+Write-Output $removed
+exit 0"#;
+
+    script.replace("__PAYLOAD__", &ps_literal(&payload))
+}
+
+#[cfg(windows)]
 fn ps_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -921,11 +1533,7 @@ mod tests {
     #[cfg(windows)]
     fn formats_probe_command_for_proxy_settings() {
         let value = probe_proxy_status_command(
-            &MtProtoProxy {
-                server: "example.com".to_string(),
-                port: 443,
-                secret: "abcd".to_string(),
-            },
+            &MtProtoProxy::mtproto("example.com", 443, "abcd"),
             4,
         );
         assert!(value.contains("tg://settings/data_and_storage/proxy/settings"));
@@ -936,11 +1544,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn formats_cleanup_command_for_proxy_settings() {
-        let value = cleanup_proxies_command(&[MtProtoProxy {
-            server: "example.com".to_string(),
-            port: 443,
-            secret: "abcd".to_string(),
-        }]);
+        let value = cleanup_proxies_command(&[MtProtoProxy::mtproto("example.com", 443, "abcd")]);
         assert!(value.contains("tg://settings/data_and_storage/proxy/settings"));
         assert!(value.contains("class `anonymous namespace''::ProxyRow"));
         assert!(value.contains("Delete"));

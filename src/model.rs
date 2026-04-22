@@ -10,39 +10,181 @@ use serde::{Deserialize, Serialize};
 use crate::APP_VERSION;
 use crate::paths::AppPaths;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MtProtoProxy {
-    pub server: String,
-    pub port: u16,
-    pub secret: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyKind {
+    #[default]
+    MtProto,
+    Socks5,
 }
 
-impl MtProtoProxy {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TelegramProxy {
+    #[serde(default)]
+    pub kind: ProxyKind,
+    pub server: String,
+    pub port: u16,
+    pub secret: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+pub type MtProtoProxy = TelegramProxy;
+
+impl TelegramProxy {
+    pub fn mtproto(
+        server: impl Into<String>,
+        port: u16,
+        secret: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: ProxyKind::MtProto,
+            server: server.into(),
+            port,
+            secret: Some(secret.into()),
+            username: None,
+            password: None,
+        }
+    }
+
+    pub fn socks5(
+        server: impl Into<String>,
+        port: u16,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Self {
+        Self {
+            kind: ProxyKind::Socks5,
+            server: server.into(),
+            port,
+            secret: None,
+            username,
+            password,
+        }
+    }
+
+    pub fn protocol_label(&self) -> &'static str {
+        match self.kind {
+            ProxyKind::MtProto => "MTProto",
+            ProxyKind::Socks5 => "SOCKS5",
+        }
+    }
+
     pub fn deep_link(&self) -> String {
-        format!(
-            "tg://proxy?server={}&port={}&secret={}",
-            self.server, self.port, self.secret
-        )
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer.append_pair("server", &self.server);
+        serializer.append_pair("port", &self.port.to_string());
+        match self.kind {
+            ProxyKind::MtProto => {
+                if let Some(secret) = &self.secret {
+                    serializer.append_pair("secret", secret);
+                }
+                format!("tg://proxy?{}", serializer.finish())
+            }
+            ProxyKind::Socks5 => {
+                if let Some(username) = &self.username {
+                    if !username.is_empty() {
+                        serializer.append_pair("user", username);
+                    }
+                }
+                if let Some(password) = &self.password {
+                    if !password.is_empty() {
+                        serializer.append_pair("pass", password);
+                    }
+                }
+                format!("tg://socks?{}", serializer.finish())
+            }
+        }
     }
 
     pub fn masked_secret(&self) -> String {
-        if self.secret.len() <= 12 {
-            return self.secret.clone();
+        let Some(secret) = &self.secret else {
+            return "open".to_string();
+        };
+
+        if secret.len() <= 12 {
+            return secret.clone();
         }
 
-        let prefix = &self.secret[..8];
-        let suffix = &self.secret[self.secret.len() - 4..];
+        let prefix = &secret[..8];
+        let suffix = &secret[secret.len() - 4..];
         format!("{prefix}...{suffix}")
     }
 
+    pub fn masked_auth_label(&self) -> String {
+        match self.kind {
+            ProxyKind::MtProto => self.masked_secret(),
+            ProxyKind::Socks5 => match (&self.username, &self.password) {
+                (Some(username), _) if !username.is_empty() => {
+                    format!("user {}", compact_value(username, 12))
+                }
+                _ => "open".to_string(),
+            },
+        }
+    }
+
     pub fn short_label(&self) -> String {
-        format!("{}:{} ({})", self.server, self.port, self.masked_secret())
+        format!(
+            "{} {}:{} ({})",
+            self.protocol_label(),
+            self.server,
+            self.port,
+            self.masked_auth_label()
+        )
+    }
+
+}
+
+impl fmt::Display for TelegramProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}:{}", self.protocol_label(), self.server, self.port)
     }
 }
 
-impl fmt::Display for MtProtoProxy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.server, self.port)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderSourceKind {
+    #[default]
+    MtprotoRuPage,
+    TelegramLinkList,
+    Socks5UrlList,
+}
+
+impl ProviderSourceKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ProviderSourceKind::MtprotoRuPage => "MTProto page",
+            ProviderSourceKind::TelegramLinkList => "MTProto feed",
+            ProviderSourceKind::Socks5UrlList => "SOCKS5 feed",
+        }
+    }
+
+    pub fn is_socks5(&self) -> bool {
+        matches!(self, ProviderSourceKind::Socks5UrlList)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ProviderSource {
+    pub name: String,
+    pub url: String,
+    pub kind: ProviderSourceKind,
+    pub enabled: bool,
+}
+
+impl ProviderSource {
+    pub fn new(
+        name: impl Into<String>,
+        url: impl Into<String>,
+        kind: ProviderSourceKind,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            url: url.into(),
+            kind,
+            enabled: true,
+        }
     }
 }
 
@@ -77,12 +219,29 @@ impl AppConfig {
         let mut config: Self = toml::from_str(&raw)
             .with_context(|| format!("Не удалось разобрать {}", paths.config_file.display()))?;
         config.app_version = APP_VERSION.to_string();
+        if config.provider.source_url.trim().is_empty() {
+            config.provider.source_url = "https://mtproto.ru/personal.php".to_string();
+        }
+        if config.provider.sources.is_empty() {
+            config.provider.sources = ProviderConfig::default_sources();
+        } else {
+            for default_source in ProviderConfig::default_sources() {
+                let exists = config.provider.sources.iter().any(|source| {
+                    source.name.eq_ignore_ascii_case(&default_source.name)
+                        || source.url.eq_ignore_ascii_case(&default_source.url)
+                });
+                if !exists {
+                    config.provider.sources.push(default_source);
+                }
+            }
+        }
         Ok(config)
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let body = toml::to_string_pretty(self).context("Не удалось сериализовать config.toml")?;
-        fs::write(path, body).with_context(|| format!("Не удалось записать {}", path.display()))?;
+        fs::write(path, body)
+            .with_context(|| format!("Не удалось записать {}", path.display()))?;
         Ok(())
     }
 
@@ -110,16 +269,76 @@ impl AppConfig {
 #[serde(default)]
 pub struct ProviderConfig {
     pub source_url: String,
+    pub sources: Vec<ProviderSource>,
     pub fetch_attempts: usize,
     pub fetch_retry_delay_ms: u64,
+    pub enable_socks5_fallback: bool,
+}
+
+impl ProviderConfig {
+    pub fn default_sources() -> Vec<ProviderSource> {
+        vec![
+            ProviderSource::new(
+                "mtproto.ru",
+                "https://mtproto.ru/personal.php",
+                ProviderSourceKind::MtprotoRuPage,
+            ),
+            ProviderSource::new(
+                "SoliSpirit MTProto",
+                "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt",
+                ProviderSourceKind::TelegramLinkList,
+            ),
+            ProviderSource::new(
+                "Argh94 MTProto",
+                "https://raw.githubusercontent.com/Argh94/Proxy-List/main/MTProto.txt",
+                ProviderSourceKind::TelegramLinkList,
+            ),
+            ProviderSource::new(
+                "Proxifly SOCKS5",
+                "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
+                ProviderSourceKind::Socks5UrlList,
+            ),
+            ProviderSource::new(
+                "Argh94 SOCKS5",
+                "https://raw.githubusercontent.com/Argh94/Proxy-List/main/SOCKS5.txt",
+                ProviderSourceKind::Socks5UrlList,
+            ),
+            ProviderSource::new(
+                "hookzof SOCKS5",
+                "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+                ProviderSourceKind::Socks5UrlList,
+            ),
+        ]
+    }
+
+    pub fn active_sources(&self) -> Vec<ProviderSource> {
+        self.sources
+            .iter()
+            .filter(|source| source.enabled)
+            .filter(|source| self.enable_socks5_fallback || !source.kind.is_socks5())
+            .cloned()
+            .collect()
+    }
+
+    pub fn source_counts(&self) -> (usize, usize) {
+        let active = self.active_sources();
+        let mtproto = active
+            .iter()
+            .filter(|source| !source.kind.is_socks5())
+            .count();
+        let socks5 = active.iter().filter(|source| source.kind.is_socks5()).count();
+        (mtproto, socks5)
+    }
 }
 
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             source_url: "https://mtproto.ru/personal.php".to_string(),
+            sources: Self::default_sources(),
             fetch_attempts: 8,
             fetch_retry_delay_ms: 1_000,
+            enable_socks5_fallback: true,
         }
     }
 }
@@ -200,7 +419,8 @@ impl AppState {
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let body =
             serde_json::to_string_pretty(self).context("Не удалось сериализовать state.json")?;
-        fs::write(path, body).with_context(|| format!("Не удалось записать {}", path.display()))?;
+        fs::write(path, body)
+            .with_context(|| format!("Не удалось записать {}", path.display()))?;
         Ok(())
     }
 
@@ -308,6 +528,25 @@ pub struct InitOverrides {
     pub autostart_enabled: Option<bool>,
 }
 
+fn compact_value(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_string();
+    }
+
+    let head = max.saturating_sub(4) / 2;
+    let tail = max.saturating_sub(4) - head;
+    let prefix = value.chars().take(head).collect::<String>();
+    let suffix = value
+        .chars()
+        .rev()
+        .take(tail)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    format!("{prefix}…{suffix}")
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -322,11 +561,11 @@ mod tests {
         for index in 0..4 {
             state.push_recent(
                 ProxyRecord::new(
-                    MtProtoProxy {
-                        server: format!("10.0.0.{index}"),
-                        port: 443,
-                        secret: format!("secret-{index}"),
-                    },
+                    TelegramProxy::mtproto(
+                        format!("10.0.0.{index}"),
+                        443,
+                        format!("secret-{index}"),
+                    ),
                     "test",
                 ),
                 3,
@@ -355,6 +594,7 @@ mod tests {
         config.autostart.enabled = true;
         config.autostart.method = AutostartMethod::StartupFolder;
         config.watcher.auto_cleanup_dead_proxies = false;
+        config.provider.enable_socks5_fallback = false;
         config.save(&paths.config_file).unwrap();
 
         let loaded_config = AppConfig::load(&paths).unwrap();
@@ -364,6 +604,8 @@ mod tests {
             AutostartMethod::StartupFolder
         );
         assert!(!loaded_config.watcher.auto_cleanup_dead_proxies);
+        assert!(!loaded_config.provider.enable_socks5_fallback);
+        assert!(!loaded_config.provider.sources.is_empty());
 
         let mut state = AppState::default();
         state.mark_failure();
@@ -371,5 +613,50 @@ mod tests {
 
         let loaded_state = AppState::load(&paths).unwrap();
         assert_eq!(loaded_state.watcher.failure_streak, 1);
+    }
+
+    #[test]
+    fn config_load_appends_new_default_sources() {
+        let root = tempdir().unwrap();
+        let appdata = root.path().join("app");
+        let local = root.path().join("local");
+        fs::create_dir_all(&appdata).unwrap();
+        fs::create_dir_all(&local).unwrap();
+
+        let paths = AppPaths::from_base_dirs(appdata, local);
+        paths.ensure_dirs().unwrap();
+
+        let legacy = AppConfig {
+            app_version: "0.1.0-beta.8".to_string(),
+            provider: ProviderConfig {
+                source_url: "https://mtproto.ru/personal.php".to_string(),
+                sources: vec![
+                    ProviderSource::new(
+                        "mtproto.ru",
+                        "https://mtproto.ru/personal.php",
+                        ProviderSourceKind::MtprotoRuPage,
+                    ),
+                    ProviderSource::new(
+                        "SoliSpirit MTProto",
+                        "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt",
+                        ProviderSourceKind::TelegramLinkList,
+                    ),
+                ],
+                fetch_attempts: 8,
+                fetch_retry_delay_ms: 1_000,
+                enable_socks5_fallback: true,
+            },
+            watcher: WatcherConfig::default(),
+            autostart: AutostartConfig::default(),
+        };
+        legacy.save(&paths.config_file).unwrap();
+
+        let loaded = AppConfig::load(&paths).unwrap();
+        assert!(loaded.provider.sources.len() > 2);
+        assert!(loaded
+            .provider
+            .sources
+            .iter()
+            .any(|source| source.name == "Argh94 SOCKS5"));
     }
 }

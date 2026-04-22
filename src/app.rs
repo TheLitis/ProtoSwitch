@@ -32,6 +32,7 @@ pub(crate) struct DoctorSnapshot {
     pub telegram_executable: Option<String>,
     pub telegram_running: bool,
     pub autostart: windows::AutostartStatus,
+    pub enabled_sources: Vec<String>,
     pub provider_probe: Result<String, String>,
 }
 
@@ -182,7 +183,7 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
         return ui::run_status(paths);
     }
 
-    print_plain_status(paths, &config, &state, &autostart);
+        print_plain_status_v2(paths, &config, &state, &autostart);
     Ok(())
 }
 
@@ -197,7 +198,7 @@ fn handle_cleanup(paths: &AppPaths) -> anyhow::Result<()> {
 }
 
 fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
-    let report = doctor_snapshot(paths)?;
+    let report = doctor_snapshot_v2(paths)?;
     let provider_probe_display = match &report.provider_probe {
         Ok(proxy) => format!("ok ({proxy})"),
         Err(error) => format!("error ({error})"),
@@ -391,6 +392,7 @@ fn watch_cycle(
     }
 }
 
+#[allow(dead_code)]
 fn print_plain_status(
     paths: &AppPaths,
     config: &AppConfig,
@@ -468,6 +470,110 @@ fn print_plain_status(
         }
     );
     println!("Автоподчистка proxy: {}", if config.watcher.auto_cleanup_dead_proxies { "вкл" } else { "выкл" });
+    if let Some(target) = &autostart.target {
+        println!("Цель автозапуска: {target}");
+    }
+    println!("config.toml: {}", paths.config_file.display());
+    println!("state.json: {}", paths.state_file.display());
+    println!("watch.log: {}", paths.log_file.display());
+    if let Some(error) = &state.last_error {
+        println!("Последняя ошибка: {error}");
+    }
+}
+
+fn print_plain_status_v2(
+    paths: &AppPaths,
+    config: &AppConfig,
+    state: &AppState,
+    autostart: &windows::AutostartStatus,
+) {
+    println!("ProtoSwitch {}", APP_VERSION);
+    println!("Статус proxy: {}", current_proxy_status_text(state));
+    println!("Статус источника: {}", source_status_text(state));
+    println!("Пул источников: {}", provider_pool_summary(config));
+    println!("Включённые источники: {}", enabled_sources_summary(config));
+    println!(
+        "Текущий proxy: {}",
+        state
+            .current_proxy
+            .as_ref()
+            .map(|entry| entry.proxy.short_label())
+            .unwrap_or_else(|| "не выбран".to_string())
+    );
+    println!(
+        "Pending proxy: {}",
+        state
+            .pending_proxy
+            .as_ref()
+            .map(|entry| entry.proxy.short_label())
+            .unwrap_or_else(|| "нет".to_string())
+    );
+    println!("Режим watcher: {}", watcher_mode(&state.watcher.mode));
+    println!("Telegram запущен: {}", yes_no(state.watcher.telegram_running));
+    if let Some(record) = &state.current_proxy {
+        println!("Последний успешный источник: {}", record.source);
+    }
+    println!(
+        "Последний fetch: {}",
+        state
+            .last_fetch_at
+            .as_ref()
+            .map(format_local_time)
+            .unwrap_or_else(|| "нет данных".to_string())
+    );
+    println!(
+        "Последний apply: {}",
+        state
+            .last_apply_at
+            .as_ref()
+            .map(format_local_time)
+            .unwrap_or_else(|| "нет данных".to_string())
+    );
+    println!(
+        "Следующая проверка: {}",
+        state
+            .watcher
+            .next_check_at
+            .as_ref()
+            .map(format_local_time)
+            .unwrap_or_else(|| "нет данных".to_string())
+    );
+    println!(
+        "Автозапуск: {}",
+        if autostart.installed {
+            format!(
+                "да ({})",
+                autostart
+                    .method
+                    .as_ref()
+                    .map(autostart_method_label)
+                    .unwrap_or("unknown")
+            )
+        } else if config.autostart.enabled {
+            format!(
+                "ожидается ({})",
+                autostart_method_label(&config.autostart.method)
+            )
+        } else {
+            "нет".to_string()
+        }
+    );
+    println!(
+        "Автоподчистка proxy: {}",
+        if config.watcher.auto_cleanup_dead_proxies {
+            "вкл"
+        } else {
+            "выкл"
+        }
+    );
+    println!(
+        "SOCKS5 fallback: {}",
+        if config.provider.enable_socks5_fallback {
+            "вкл"
+        } else {
+            "выкл"
+        }
+    );
     if let Some(target) = &autostart.target {
         println!("Цель автозапуска: {target}");
     }
@@ -783,15 +889,18 @@ pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
 }
 
 pub(crate) fn doctor_snapshot(paths: &AppPaths) -> anyhow::Result<DoctorSnapshot> {
+    doctor_snapshot_v2(paths)
+}
+
+pub(crate) fn doctor_snapshot_v2(paths: &AppPaths) -> anyhow::Result<DoctorSnapshot> {
     let config = AppConfig::load(paths)?;
     let provider = MtProtoProvider::new(config.provider.clone())?;
     let installation = telegram::detect_installation()?;
     let autostart = windows::query_autostart();
-    let provider_probe = provider
-        .fetch_candidate(&[])
-        .and_then(|record| validate_candidate(record, config.watcher.connect_timeout_secs))
-        .map(|record| record.proxy.short_label())
-        .map_err(|error| error.to_string());
+    let provider_probe =
+        fetch_validated_candidate(paths, &config, &provider, &[] as &[MtProtoProxy])
+            .map(|record| format!("{} via {}", record.proxy.short_label(), record.source))
+            .map_err(|error| error.to_string());
 
     Ok(DoctorSnapshot {
         app_version: APP_VERSION.to_string(),
@@ -804,6 +913,12 @@ pub(crate) fn doctor_snapshot(paths: &AppPaths) -> anyhow::Result<DoctorSnapshot
             .map(|path| path.display().to_string()),
         telegram_running: telegram::is_running().unwrap_or(false),
         autostart,
+        enabled_sources: config
+            .provider
+            .active_sources()
+            .into_iter()
+            .map(|source| source.name)
+            .collect(),
         provider_probe,
     })
 }
@@ -817,6 +932,15 @@ pub(crate) fn set_autostart_enabled(paths: &AppPaths, enabled: bool) -> anyhow::
 pub(crate) fn set_auto_cleanup_enabled(paths: &AppPaths, enabled: bool) -> anyhow::Result<String> {
     let mut config = AppConfig::load(paths)?;
     config.watcher.auto_cleanup_dead_proxies = enabled;
+    persist_config(paths, config)
+}
+
+pub(crate) fn set_socks5_fallback_enabled(
+    paths: &AppPaths,
+    enabled: bool,
+) -> anyhow::Result<String> {
+    let mut config = AppConfig::load(paths)?;
+    config.provider.enable_socks5_fallback = enabled;
     persist_config(paths, config)
 }
 
@@ -1011,6 +1135,29 @@ fn autostart_method_label(method: &AutostartMethod) -> &'static str {
     match method {
         AutostartMethod::ScheduledTask => "scheduled_task",
         AutostartMethod::StartupFolder => "startup_folder",
+    }
+}
+
+pub(crate) fn provider_pool_summary(config: &AppConfig) -> String {
+    let (mtproto, socks5) = config.provider.source_counts();
+    if socks5 == 0 {
+        format!("{mtproto} MTProto")
+    } else {
+        format!("{mtproto} MTProto + {socks5} SOCKS5")
+    }
+}
+
+pub(crate) fn enabled_sources_summary(config: &AppConfig) -> String {
+    let names = config
+        .provider
+        .active_sources()
+        .into_iter()
+        .map(|source| source.name)
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        "нет активных источников".to_string()
+    } else {
+        names.join(", ")
     }
 }
 
