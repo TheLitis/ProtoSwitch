@@ -233,10 +233,7 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
         "Telegram Desktop: {}",
         report.telegram_executable.as_deref().unwrap_or("не найден")
     );
-    println!(
-        "Telegram запущен: {}",
-        yes_no(report.telegram_running)
-    );
+    println!("Telegram запущен: {}", yes_no(report.telegram_running));
     println!(
         "Автозапуск: {}",
         if report.autostart.installed {
@@ -366,23 +363,29 @@ fn watch_cycle(
         return Ok("Есть pending proxy, ждём запуска Telegram.".to_string());
     }
 
-    let record = match fetch_validated_candidate(paths, config, provider, &state.recent_proxy_values()) {
-        Ok(record) => record,
-        Err(error) => {
-            state.watcher.mode = WatcherMode::Error;
-            state.set_source_status(error.to_string());
-            if state.current_proxy.is_some() {
-                state.set_current_proxy_status("текущий proxy не работает, replacement не найден");
-            } else {
-                state.set_current_proxy_status("рабочий proxy не найден");
+    let record =
+        match fetch_validated_candidate(paths, config, provider, &state.recent_proxy_values()) {
+            Ok(record) => record,
+            Err(error) => {
+                state.watcher.mode = WatcherMode::Error;
+                state.set_source_status(error.to_string());
+                if state.current_proxy.is_some() {
+                    state.set_current_proxy_status(
+                        "текущий proxy не работает, replacement не найден",
+                    );
+                } else {
+                    state.set_current_proxy_status("рабочий proxy не найден");
+                }
+                state.save(&paths.state_file)?;
+                return Err(error);
             }
-            state.save(&paths.state_file)?;
-            return Err(error);
-        }
-    };
+        };
     state.last_fetch_at = Some(record.captured_at);
     state.push_recent(record.clone(), config.watcher.history_size);
-    state.set_source_status(format!("найден рабочий proxy: {}", record.proxy.short_label()));
+    state.set_source_status(format!(
+        "найден рабочий proxy: {}",
+        record.proxy.short_label()
+    ));
 
     if telegram_running {
         telegram::open_proxy_link(&record.proxy)?;
@@ -579,7 +582,9 @@ fn cleanup_dead_proxies_in_state(
         return Ok(0);
     }
 
-    state.recent_proxies.retain(|record| !dead.contains(&record.proxy));
+    state
+        .recent_proxies
+        .retain(|record| !dead.contains(&record.proxy));
     if state
         .current_proxy
         .as_ref()
@@ -696,7 +701,10 @@ pub(crate) fn switch_to_candidate(paths: &AppPaths, dry_run: bool) -> anyhow::Re
     state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
     state.mark_healthy();
     state.set_current_proxy_status("применён вручную, ждём перепроверку");
-    state.set_source_status(format!("найден рабочий proxy: {}", record.proxy.short_label()));
+    state.set_source_status(format!(
+        "найден рабочий proxy: {}",
+        record.proxy.short_label()
+    ));
     state.push_recent(record.clone(), config.watcher.history_size);
     try_cleanup_dead_proxies(paths, &config, &mut state);
     state.save(&paths.state_file)?;

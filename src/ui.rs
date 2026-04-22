@@ -29,131 +29,10 @@ pub fn run_setup(config: AppConfig) -> anyhow::Result<AppConfig> {
     let mut draft = SetupDraft::from(config);
 
     loop {
-        session.terminal.draw(|frame| {
-            let area = frame.area();
-            frame.render_widget(Clear, area);
+        session.terminal.draw(|frame| render_setup(frame, &draft))?;
 
-            let outer = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(5),
-                    Constraint::Min(14),
-                    Constraint::Length(3),
-                ])
-                .split(area);
-
-            let body = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
-                .split(outer[2]);
-
-            let title = Paragraph::new(Line::from(vec![
-                Span::styled("ProtoSwitch", title_style()),
-                Span::raw(" "),
-                Span::styled(APP_VERSION, muted_style()),
-                Span::raw("  "),
-                badge("Настройка", warn_color(), surface_color()),
-            ]))
-            .block(panel("Первый запуск", true));
-            frame.render_widget(title, outer[0]);
-
-            let hero = Paragraph::new(vec![
-                Line::from("Запуск настроен как отдельный операторский экран: сначала выставьте режим watcher, затем сохраните конфиг."),
-                Line::from("Изменения применяются стрелками. Enter сохраняет профиль, Esc возвращает исходные параметры."),
-            ])
-            .block(panel("Сценарий", false))
-            .wrap(Wrap { trim: true });
-            frame.render_widget(hero, outer[1]);
-
-            let items = draft.fields().into_iter().enumerate().map(|(index, field)| {
-                let style = if index == draft.focus {
-                    Style::default()
-                        .fg(accent_color())
-                        .bg(selection_bg())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(text_color())
-                };
-
-                let row = Line::from(vec![
-                    Span::styled(format!("{:<24}", field.label), style),
-                    Span::styled(field.value, style),
-                ]);
-                ListItem::new(row)
-            });
-
-            let form = List::new(items).block(panel("Параметры", true));
-            frame.render_widget(form, body[0]);
-
-            let sidebar = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(9), Constraint::Min(8)])
-                .split(body[1]);
-
-            let summary = Paragraph::new(vec![
-                Line::from(vec![
-                    Span::raw("Проверка: "),
-                    Span::styled(
-                        format!("{} сек", draft.check_interval_secs),
-                        value_style(),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::raw("TCP timeout: "),
-                    Span::styled(
-                        format!("{} сек", draft.connect_timeout_secs),
-                        value_style(),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::raw("Порог сбоев: "),
-                    Span::styled(draft.failure_threshold.to_string(), value_style()),
-                ]),
-                Line::from(vec![
-                    Span::raw("История proxy: "),
-                    Span::styled(draft.history_size.to_string(), value_style()),
-                ]),
-                Line::from(vec![
-                    Span::raw("Автозапуск: "),
-                    Span::styled(
-                        if draft.autostart_enabled { "вкл" } else { "выкл" },
-                        if draft.autostart_enabled {
-                            positive_style()
-                        } else {
-                            muted_style()
-                        },
-                    ),
-                ]),
-            ])
-            .block(panel("Профиль", false));
-            frame.render_widget(summary, sidebar[0]);
-
-            let active_field = draft.current_field();
-            let tips = Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(active_field.label, title_style()),
-                    Span::raw("  "),
-                    Span::styled(active_field.value, value_style()),
-                ]),
-                Line::from(""),
-                Line::from(active_field.description),
-                Line::from(""),
-                Line::from("Рекомендация: начните с интервала 30 сек и порога 3."),
-                Line::from("Автозапуск нужен только если вы хотите фоновую работу сразу после логина."),
-            ])
-            .block(panel("Подсказка", false))
-            .wrap(Wrap { trim: true });
-            frame.render_widget(tips, sidebar[1]);
-
-            let footer = Paragraph::new(
-                "↑/↓ поле • ←/→ изменить • Enter сохранить • Esc отмена",
-            )
-            .block(panel("Управление", false));
-            frame.render_widget(footer, outer[3]);
-        })?;
-
-        if let Event::Key(key) = event::read().context("Не удалось прочитать клавиатуру")? {
+        if let Event::Key(key) = event::read().context("Не удалось прочитать клавиатуру")?
+        {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
@@ -173,24 +52,25 @@ pub fn run_setup(config: AppConfig) -> anyhow::Result<AppConfig> {
 
 pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
     let mut session = TerminalSession::new()?;
-    let mut dashboard = DashboardState::default();
+    let mut console = ConsoleState::default();
 
     loop {
         let (config, state, autostart) = app::load_status_snapshot(paths)?;
-        let watcher_online = app::watcher_process_exists() || app::watcher_is_recent(&config, &state);
-        let actions = dashboard_actions(&state, &config, &autostart, watcher_online);
-        dashboard.focus = dashboard.focus.min(actions.len().saturating_sub(1));
-        dashboard.sync_error(&state.last_error);
+        let watcher_online =
+            app::watcher_process_exists() || app::watcher_is_recent(&config, &state);
+        let actions = console_actions(&state, &config, &autostart, watcher_online);
+        console.focus = console.focus.min(actions.len().saturating_sub(1));
+        console.sync_error(&state.last_error);
 
         session.terminal.draw(|frame| {
-            render_dashboard(
+            render_console(
                 frame,
                 paths,
                 &config,
                 &state,
                 &autostart,
                 watcher_online,
-                &dashboard,
+                &console,
                 &actions,
             );
         })?;
@@ -207,28 +87,29 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
             continue;
         }
 
-        let selected = actions[dashboard.focus];
+        let selected = actions[console.focus];
         let direct = match key.code {
             KeyCode::Up => {
-                dashboard.focus = dashboard.focus.saturating_sub(1);
+                console.focus = console.focus.saturating_sub(1);
                 None
             }
             KeyCode::Down => {
-                dashboard.focus = (dashboard.focus + 1).min(actions.len().saturating_sub(1));
+                console.focus = (console.focus + 1).min(actions.len().saturating_sub(1));
                 None
             }
-            KeyCode::Char('q') | KeyCode::Esc => Some(DashboardAction::Exit),
+            KeyCode::Char('q') | KeyCode::Esc => Some(ConsoleAction::Exit),
             KeyCode::Enter => Some(selected),
-            KeyCode::Char('s') => find_action(&actions, DashboardAction::SwitchNow),
-            KeyCode::Char('p') => find_action(&actions, DashboardAction::ApplyPending),
-            KeyCode::Char('w') => find_action(&actions, DashboardAction::WatchControl),
-            KeyCode::Char('x') => find_action(&actions, DashboardAction::StopWatcher),
-            KeyCode::Char('a') => find_action(&actions, DashboardAction::ToggleAutostart),
-            KeyCode::Char('e') => find_action(&actions, DashboardAction::Settings),
-            KeyCode::Char('d') => find_action(&actions, DashboardAction::Doctor),
-            KeyCode::Char('l') => find_action(&actions, DashboardAction::OpenLog),
-            KeyCode::Char('o') => find_action(&actions, DashboardAction::OpenDataDir),
-            KeyCode::Char('r') => Some(DashboardAction::Refresh),
+            KeyCode::Char('s') => find_action(&actions, ConsoleAction::SwitchNow),
+            KeyCode::Char('p') => find_action(&actions, ConsoleAction::ApplyPending),
+            KeyCode::Char('c') => find_action(&actions, ConsoleAction::CleanupDead),
+            KeyCode::Char('w') => find_action(&actions, ConsoleAction::WatchControl),
+            KeyCode::Char('x') => find_action(&actions, ConsoleAction::StopWatcher),
+            KeyCode::Char('a') => find_action(&actions, ConsoleAction::ToggleAutostart),
+            KeyCode::Char('e') => find_action(&actions, ConsoleAction::Settings),
+            KeyCode::Char('d') => find_action(&actions, ConsoleAction::Doctor),
+            KeyCode::Char('l') => find_action(&actions, ConsoleAction::OpenLog),
+            KeyCode::Char('o') => find_action(&actions, ConsoleAction::OpenDataDir),
+            KeyCode::Char('r') => Some(ConsoleAction::Refresh),
             _ => None,
         };
 
@@ -237,16 +118,20 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
         };
 
         match action {
-            DashboardAction::Exit => return Ok(()),
-            DashboardAction::SwitchNow => match app::switch_to_candidate(paths, false) {
-                Ok(message) => dashboard.set_result("Переключение", vec![message.clone()]),
-                Err(error) => dashboard.push_activity(format!("switch: {error}")),
+            ConsoleAction::Exit => return Ok(()),
+            ConsoleAction::SwitchNow => match app::switch_to_candidate(paths, false) {
+                Ok(message) => console.set_result("Switch", vec![message]),
+                Err(error) => console.push_activity(format!("switch: {error}")),
             },
-            DashboardAction::ApplyPending => match app::apply_pending_proxy(paths) {
-                Ok(message) => dashboard.set_result("Pending proxy", vec![message.clone()]),
-                Err(error) => dashboard.push_activity(format!("pending: {error}")),
+            ConsoleAction::ApplyPending => match app::apply_pending_proxy(paths) {
+                Ok(message) => console.set_result("Pending", vec![message]),
+                Err(error) => console.push_activity(format!("pending: {error}")),
             },
-            DashboardAction::WatchControl => {
+            ConsoleAction::CleanupDead => match app::cleanup_dead_proxies(paths) {
+                Ok(message) => console.set_result("Cleanup", vec![message]),
+                Err(error) => console.push_activity(format!("cleanup: {error}")),
+            },
+            ConsoleAction::WatchControl => {
                 let result = if watcher_online {
                     app::restart_background_watcher(paths)
                 } else {
@@ -260,12 +145,12 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 };
 
                 match result {
-                    Ok(message) => dashboard.set_result("Watcher", vec![message.clone()]),
-                    Err(error) => dashboard.push_activity(format!("watcher: {error}")),
+                    Ok(message) => console.set_result("Watcher", vec![message]),
+                    Err(error) => console.push_activity(format!("watcher: {error}")),
                 }
             }
-            DashboardAction::StopWatcher => match app::stop_background_watcher(paths) {
-                Ok(stopped) => dashboard.set_result(
+            ConsoleAction::StopWatcher => match app::stop_background_watcher(paths) {
+                Ok(stopped) => console.set_result(
                     "Watcher",
                     vec![if stopped == 0 {
                         "Фоновый watcher не найден.".to_string()
@@ -273,16 +158,16 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                         format!("Остановлено headless watcher-процессов: {stopped}")
                     }],
                 ),
-                Err(error) => dashboard.push_activity(format!("watcher stop: {error}")),
+                Err(error) => console.push_activity(format!("watcher stop: {error}")),
             },
-            DashboardAction::ToggleAutostart => {
+            ConsoleAction::ToggleAutostart => {
                 let enable = !(autostart.installed || config.autostart.enabled);
                 match app::set_autostart_enabled(paths, enable) {
-                    Ok(message) => dashboard.set_result("Автозапуск", vec![message.clone()]),
-                    Err(error) => dashboard.push_activity(format!("autostart: {error}")),
+                    Ok(message) => console.set_result("Autostart", vec![message]),
+                    Err(error) => console.push_activity(format!("autostart: {error}")),
                 }
             }
-            DashboardAction::Settings => {
+            ConsoleAction::Settings => {
                 let current = config.clone();
                 let original_marker = toml::to_string(&current)?;
                 drop(session);
@@ -291,328 +176,358 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 session = TerminalSession::new()?;
 
                 if original_marker == edited_marker {
-                    dashboard.set_result(
-                        "Настройки",
+                    console.set_result(
+                        "Settings",
                         vec!["Изменений нет. Конфиг оставлен без правок.".to_string()],
                     );
                 } else {
                     match app::persist_config(paths, edited) {
-                        Ok(message) => dashboard.set_result("Настройки", vec![message.clone()]),
-                        Err(error) => dashboard.push_activity(format!("settings: {error}")),
+                        Ok(message) => console.set_result("Settings", vec![message]),
+                        Err(error) => console.push_activity(format!("settings: {error}")),
                     }
                 }
             }
-            DashboardAction::Doctor => match app::doctor_snapshot(paths) {
-                Ok(report) => dashboard.set_inspector("Doctor", doctor_lines(&report)),
-                Err(error) => dashboard.push_activity(format!("doctor: {error}")),
+            ConsoleAction::Doctor => match app::doctor_snapshot(paths) {
+                Ok(report) => console.set_inspector("Doctor", doctor_lines(&report)),
+                Err(error) => console.push_activity(format!("doctor: {error}")),
             },
-            DashboardAction::OpenLog => match app::open_in_notepad(&paths.log_file) {
-                Ok(_) => dashboard.set_result(
-                    "Журнал",
-                    vec![format!("Открыт {}", paths.log_file.display())],
-                ),
-                Err(error) => dashboard.push_activity(format!("log: {error}")),
+            ConsoleAction::OpenLog => match app::open_in_notepad(&paths.log_file) {
+                Ok(_) => {
+                    console.set_result("Log", vec![format!("Открыт {}", paths.log_file.display())])
+                }
+                Err(error) => console.push_activity(format!("log: {error}")),
             },
-            DashboardAction::OpenDataDir => match app::open_in_shell(&paths.local_dir) {
-                Ok(_) => dashboard.set_result(
-                    "Данные",
+            ConsoleAction::OpenDataDir => match app::open_in_shell(&paths.local_dir) {
+                Ok(_) => console.set_result(
+                    "Data",
                     vec![format!("Открыт {}", paths.local_dir.display())],
                 ),
-                Err(error) => dashboard.push_activity(format!("data-dir: {error}")),
+                Err(error) => console.push_activity(format!("data: {error}")),
             },
-            DashboardAction::Refresh => {
-                dashboard.set_result(
-                    "Снимок",
-                    vec!["Статус обновлён, данные перечитаны из state/config.".to_string()],
-                );
-            }
+            ConsoleAction::Refresh => console.set_result(
+                "Refresh",
+                vec!["Снимок обновлён. Данные перечитаны из state/config.".to_string()],
+            ),
         }
     }
 }
 
-fn render_dashboard(
-    frame: &mut ratatui::Frame<'_>,
-    paths: &AppPaths,
-    config: &AppConfig,
-    state: &AppState,
-    autostart: &windows::AutostartStatus,
-    watcher_online: bool,
-    dashboard: &DashboardState,
-    actions: &[DashboardAction],
-) {
+fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
     let area = frame.area();
     frame.render_widget(Clear, area);
 
-    let outer = Layout::default()
+    let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(5),
-            Constraint::Min(18),
+            Constraint::Min(12),
             Constraint::Length(3),
         ])
         .split(area);
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(31), Constraint::Min(30)])
-        .split(outer[2]);
-
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(10), Constraint::Length(9)])
-        .split(body[0]);
-
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(11), Constraint::Min(9)])
-        .split(body[1]);
-
-    let cards = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(right[0]);
-
-    let bottom = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(right[1]);
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .split(vertical[1]);
 
     let title = Paragraph::new(Line::from(vec![
         Span::styled("ProtoSwitch", title_style()),
         Span::raw(" "),
-        Span::styled(APP_VERSION, muted_style()),
+        Span::styled(APP_VERSION, subtle_style()),
         Span::raw("  "),
-        status_badge(state, watcher_online),
-        Span::raw(" "),
-        telegram_badge(state.watcher.telegram_running),
-        Span::raw(" "),
-        autostart_badge(config, autostart),
+        badge("setup"),
     ]))
-    .block(panel("Операторский режим", true));
-    frame.render_widget(title, outer[0]);
+    .block(panel("Первый запуск"));
+    frame.render_widget(title, vertical[0]);
 
-    let summary = Paragraph::new(vec![
-        summary_line("Источник", &config.provider.source_url),
+    let fields = draft
+        .fields()
+        .into_iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let selected = index == draft.focus;
+            let marker = if selected { "› " } else { "  " };
+            let style = if selected {
+                selected_style()
+            } else {
+                text_style()
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(format!("{:<22}", field.label), style),
+                Span::styled(field.value, value_style(selected)),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(fields).block(panel("Параметры")), body[0]);
+
+    let active = draft.current_field();
+    let info = Paragraph::new(vec![
         Line::from(vec![
-            metric_span("Последний fetch", &format_time(state.last_fetch_at.as_ref())),
-            Span::raw("   "),
-            metric_span("Последний apply", &format_time(state.last_apply_at.as_ref())),
+            Span::styled(active.label, title_style()),
+            Span::raw("  "),
+            Span::styled(active.value, value_style(true)),
         ]),
-        Line::from(vec![
-            metric_span(
-                "Следующая проверка",
-                &format_time(state.watcher.next_check_at.as_ref()),
-            ),
-            Span::raw("   "),
-            metric_span(
-                "Fail streak",
-                &format!(
-                    "{} / {}",
-                    state.watcher.failure_streak, config.watcher.failure_threshold
-                ),
-            ),
-        ]),
+        Line::from(""),
+        Line::from(active.description),
+        Line::from(""),
+        Line::from(format!("Проверка: {} сек", draft.check_interval_secs)),
+        Line::from(format!("TCP timeout: {} сек", draft.connect_timeout_secs)),
+        Line::from(format!("Порог сбоев: {}", draft.failure_threshold)),
+        Line::from(format!("История proxy: {}", draft.history_size)),
+        Line::from(format!(
+            "Автозапуск: {}",
+            if draft.autostart_enabled {
+                "вкл"
+            } else {
+                "выкл"
+            }
+        )),
     ])
-    .block(panel("Сводка", false))
+    .block(panel("Контекст"))
     .wrap(Wrap { trim: true });
-    frame.render_widget(summary, outer[1]);
+    frame.render_widget(info, body[1]);
 
-    let action_items = actions.iter().enumerate().map(|(index, action)| {
-        let style = if index == dashboard.focus {
-            Style::default()
-                .fg(accent_color())
-                .bg(selection_bg())
-                .add_modifier(Modifier::BOLD)
+    let footer = Paragraph::new("↑/↓ поле  ←/→ изменить  Enter сохранить  Esc выйти")
+        .style(subtle_style())
+        .block(panel("Управление"));
+    frame.render_widget(footer, vertical[2]);
+}
+
+fn render_console(
+    frame: &mut ratatui::Frame<'_>,
+    paths: &AppPaths,
+    config: &AppConfig,
+    state: &AppState,
+    autostart: &windows::AutostartStatus,
+    watcher_online: bool,
+    console: &ConsoleState,
+    actions: &[ConsoleAction],
+) {
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(16),
+            Constraint::Length(3),
+        ])
+        .split(area);
+
+    let main = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(vertical[1]);
+
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(10),
+            Constraint::Min(8),
+            Constraint::Length(7),
+        ])
+        .split(main[0]);
+
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(11)])
+        .split(main[1]);
+
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled("ProtoSwitch", title_style()),
+        Span::raw(" "),
+        Span::styled(APP_VERSION, subtle_style()),
+        Span::raw("  "),
+        badge(if watcher_online { "online" } else { "idle" }),
+        Span::raw(" "),
+        badge(if state.watcher.telegram_running {
+            "telegram on"
         } else {
-            Style::default().fg(text_color())
-        };
+            "telegram off"
+        }),
+        Span::raw(" "),
+        badge(if autostart.installed || config.autostart.enabled {
+            "autostart"
+        } else {
+            "manual"
+        }),
+    ]))
+    .block(panel("Сессия"));
+    frame.render_widget(header, vertical[0]);
 
-        ListItem::new(Line::from(vec![
-            Span::styled(format!("{:<20}", action.label(config, autostart, watcher_online)), style),
-            Span::styled(action.shortcut(), muted_style()),
-        ]))
-    });
-    let actions_panel = List::new(action_items).block(panel("Команды", true));
-    frame.render_widget(actions_panel, left[0]);
+    frame.render_widget(
+        Paragraph::new(summary_lines(config, state, autostart, watcher_online))
+            .wrap(Wrap { trim: true })
+            .block(panel("Сводка")),
+        left[0],
+    );
 
-    let activity_lines = dashboard.activity_lines();
-    let activity = Paragraph::new(activity_lines)
-        .block(panel("Лента", false))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(activity, left[1]);
+    frame.render_widget(
+        List::new(history_items(state)).block(panel("Последние proxy")),
+        left[1],
+    );
 
-    let current = state
-        .current_proxy
-        .as_ref()
-        .map(|entry| entry.proxy.short_label())
-        .unwrap_or_else(|| "не выбран".to_string());
-    let pending = state
-        .pending_proxy
-        .as_ref()
-        .map(|entry| entry.proxy.short_label())
-        .unwrap_or_else(|| "нет".to_string());
-    let proxy_card = Paragraph::new(vec![
-        Line::from(vec![
-            Span::raw("Текущий "),
-            Span::styled(compact(&current, 42), value_style()),
-        ]),
-        Line::from(vec![
-            Span::raw("Pending "),
-            Span::styled(compact(&pending, 42), muted_style()),
-        ]),
-        Line::from(vec![
-            Span::raw("История "),
-            Span::styled(state.recent_proxies.len().to_string(), value_style()),
-            Span::raw(" из "),
-            Span::styled(config.watcher.history_size.to_string(), value_style()),
-        ]),
-        Line::from(vec![
-            Span::raw("Сеть "),
-            Span::styled(
-                if state.current_proxy.is_some() { "MTProto" } else { "ожидание" },
-                if state.current_proxy.is_some() {
-                    positive_style()
-                } else {
-                    muted_style()
-                },
+    frame.render_widget(
+        Paragraph::new(console.activity_lines())
+            .wrap(Wrap { trim: true })
+            .block(panel("Вывод")),
+        left[2],
+    );
+
+    let action_items = actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let selected = index == console.focus;
+            let prefix = if selected { "› " } else { "  " };
+            let style = if selected {
+                selected_style()
+            } else {
+                text_style()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(action.label(config, autostart, watcher_online), style),
+                Span::raw("  "),
+                Span::styled(action.shortcut(), subtle_style()),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(List::new(action_items).block(panel("Команды")), right[0]);
+
+    let detail_lines = if console.inspector_lines.is_empty() {
+        action_description_lines(
+            actions[console.focus],
+            config,
+            state,
+            autostart,
+            watcher_online,
+            paths,
+        )
+    } else {
+        console.inspector_lines.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(detail_lines)
+            .wrap(Wrap { trim: true })
+            .block(panel(&console.inspector_title)),
+        right[1],
+    );
+
+    let footer = Paragraph::new(
+        "Enter выполнить  S switch  P pending  C cleanup  W watcher  A autostart  D doctor  Q выйти",
+    )
+    .style(subtle_style())
+    .block(panel("Клавиши"));
+    frame.render_widget(footer, vertical[2]);
+}
+
+fn summary_lines(
+    config: &AppConfig,
+    state: &AppState,
+    autostart: &windows::AutostartStatus,
+    watcher_online: bool,
+) -> Vec<Line<'static>> {
+    vec![
+        kv_line(
+            "Proxy",
+            state
+                .current_proxy
+                .as_ref()
+                .map(|record| record.proxy.short_label())
+                .unwrap_or_else(|| "не выбран".to_string()),
+        ),
+        kv_line("Состояние", app::current_proxy_status_text(state)),
+        kv_line("Источник", app::source_status_text(state)),
+        kv_line(
+            "Watcher",
+            format!(
+                "{} · {} · fail {}/{}",
+                mode_label(&state.watcher.mode),
+                if watcher_online { "online" } else { "idle" },
+                state.watcher.failure_streak,
+                config.watcher.failure_threshold
             ),
-        ]),
-    ])
-    .block(panel("Proxy", true))
-    .wrap(Wrap { trim: true });
-    frame.render_widget(proxy_card, cards[0]);
-
-    let watcher_card = Paragraph::new(vec![
-        Line::from(vec![
-            Span::raw("Режим "),
-            Span::styled(mode_label(&state.watcher.mode), value_style()),
-        ]),
-        Line::from(vec![
-            Span::raw("Фон "),
-            Span::styled(
-                if watcher_online { "online" } else { "offline" },
-                if watcher_online {
-                    positive_style()
-                } else {
-                    danger_style()
-                },
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("Telegram "),
-            Span::styled(
-                if state.watcher.telegram_running { "запущен" } else { "не найден" },
-                if state.watcher.telegram_running {
-                    positive_style()
-                } else {
-                    muted_style()
-                },
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("Автозапуск "),
-            Span::styled(
-                if autostart.installed {
+        ),
+        kv_line(
+            "Telegram",
+            if state.watcher.telegram_running {
+                "запущен".to_string()
+            } else {
+                "не найден".to_string()
+            },
+        ),
+        kv_line(
+            "Автозапуск",
+            if autostart.installed {
+                format!(
+                    "вкл ({})",
                     autostart
                         .method
                         .as_ref()
                         .map(autostart_method_label)
                         .unwrap_or("unknown")
-                } else {
-                    "нет"
-                },
-                if autostart.installed {
-                    value_style()
-                } else {
-                    muted_style()
-                },
-            ),
-        ]),
-    ])
-    .block(panel("Watcher", true))
-    .wrap(Wrap { trim: true });
-    frame.render_widget(watcher_card, cards[1]);
-
-    let history_lines = if state.recent_proxies.is_empty() {
-        vec![Line::from("История пока пуста.")]
-    } else {
-        state
-            .recent_proxies
-            .iter()
-            .take(8)
-            .map(|record| {
-                Line::from(format!(
-                    "{}  {}",
-                    record.captured_at.format("%Y-%m-%d %H:%M:%S"),
-                    compact(&record.proxy.short_label(), 44)
-                ))
-            })
-            .collect()
-    };
-    let history = Paragraph::new(history_lines)
-        .block(panel("Последние proxy", false))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(history, bottom[0]);
-
-    let inspector = Paragraph::new(inspector_lines(
-        dashboard,
-        actions[dashboard.focus],
-        config,
-        autostart,
-        watcher_online,
-        paths,
-    ))
-    .block(panel(&dashboard.inspector_title, false))
-    .wrap(Wrap { trim: true });
-    frame.render_widget(inspector, bottom[1]);
-
-    let footer = Paragraph::new(
-        "↑↓ выбрать • Enter выполнить • S switch • P pending • W watcher • X stop • A autostart • E settings • D doctor • L log • O data • R refresh • Q exit",
-    )
-    .block(panel("Клавиши", false))
-    .wrap(Wrap { trim: true });
-    frame.render_widget(footer, outer[3]);
+                )
+            } else if config.autostart.enabled {
+                format!(
+                    "ожидается ({})",
+                    autostart_method_label(&config.autostart.method)
+                )
+            } else {
+                "выкл".to_string()
+            },
+        ),
+        kv_line("Последний fetch", format_time(state.last_fetch_at.as_ref())),
+        kv_line("Последний apply", format_time(state.last_apply_at.as_ref())),
+        kv_line(
+            "Следующая проверка",
+            format_time(state.watcher.next_check_at.as_ref()),
+        ),
+    ]
 }
 
-fn find_action(actions: &[DashboardAction], wanted: DashboardAction) -> Option<DashboardAction> {
-    actions.iter().copied().find(|action| *action == wanted)
+fn history_items(state: &AppState) -> Vec<ListItem<'static>> {
+    if state.recent_proxies.is_empty() {
+        return vec![ListItem::new(Line::from(vec![
+            Span::styled("• ", subtle_style()),
+            Span::styled("история пока пуста", subtle_style()),
+        ]))];
+    }
+
+    state
+        .recent_proxies
+        .iter()
+        .take(8)
+        .map(|record| {
+            ListItem::new(Line::from(vec![
+                Span::styled("• ", subtle_style()),
+                Span::styled(record.proxy.short_label(), text_style()),
+            ]))
+        })
+        .collect()
 }
 
-fn dashboard_actions(
-    state: &AppState,
+fn action_description_lines(
+    action: ConsoleAction,
     config: &AppConfig,
+    state: &AppState,
     autostart: &windows::AutostartStatus,
     watcher_online: bool,
-) -> Vec<DashboardAction> {
-    let mut actions = vec![DashboardAction::SwitchNow];
-
-    if state.pending_proxy.is_some() && state.watcher.telegram_running {
-        actions.push(DashboardAction::ApplyPending);
-    }
-
-    actions.push(DashboardAction::WatchControl);
-
-    if watcher_online {
-        actions.push(DashboardAction::StopWatcher);
-    }
-
-    if autostart.installed || config.autostart.enabled || !watcher_online {
-        actions.push(DashboardAction::ToggleAutostart);
-    } else {
-        actions.push(DashboardAction::ToggleAutostart);
-    }
-
-    actions.push(DashboardAction::Settings);
-    actions.push(DashboardAction::Doctor);
-    actions.push(DashboardAction::OpenLog);
-    actions.push(DashboardAction::OpenDataDir);
-    actions.push(DashboardAction::Refresh);
-    actions.push(DashboardAction::Exit);
-    actions
+    paths: &AppPaths,
+) -> Vec<Line<'static>> {
+    let lines = action.description(config, state, autostart, watcher_online, paths);
+    lines.into_iter().map(Line::from).collect()
 }
 
 fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
+    let probe = match &report.provider_probe {
+        Ok(proxy) => format!("ok: {proxy}"),
+        Err(error) => format!("error: {error}"),
+    };
+
     vec![
         Line::from(format!("Версия: {}", report.app_version)),
         Line::from(format!("config.toml: {}", yes_no(report.config_exists))),
@@ -643,87 +558,20 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
                     .as_ref()
                     .map(autostart_method_label)
                     .unwrap_or("unknown")
+                    .to_string()
             } else {
-                "нет"
+                "нет".to_string()
             }
         )),
-        Line::from(format!(
-            "mtproto.ru: {}",
-            match &report.provider_probe {
-                Ok(proxy) => format!("ok ({proxy})"),
-                Err(error) => format!("error ({error})"),
-            }
-        )),
+        Line::from(format!("mtproto.ru: {}", probe)),
     ]
 }
 
-fn inspector_lines(
-    dashboard: &DashboardState,
-    selected: DashboardAction,
-    config: &AppConfig,
-    autostart: &windows::AutostartStatus,
-    watcher_online: bool,
-    paths: &AppPaths,
-) -> Vec<Line<'static>> {
-    if !dashboard.inspector_lines.is_empty() {
-        return dashboard.inspector_lines.clone();
-    }
-
-    let mut lines = vec![
-        Line::from(selected.label(config, autostart, watcher_online)),
-        Line::from(""),
-    ];
-
-    lines.extend(
-        selected
-            .description(config, autostart, watcher_online, paths)
-            .into_iter()
-            .map(Line::from),
-    );
-    lines
-}
-
-fn summary_line(label: &str, value: &str) -> Line<'static> {
+fn kv_line(label: &str, value: String) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!("{label}: "), muted_style()),
-        Span::styled(compact(value, 96), value_style()),
+        Span::styled(format!("{label:<18}"), subtle_style()),
+        Span::styled(compact(&value, 72), text_style()),
     ])
-}
-
-fn metric_span(label: &str, value: &str) -> Span<'static> {
-    Span::styled(format!("{label}: {}", compact(value, 30)), value_style())
-}
-
-fn status_badge(state: &AppState, watcher_online: bool) -> Span<'static> {
-    if state.last_error.is_some() {
-        return badge("attention", danger_color(), surface_color());
-    }
-
-    if watcher_online && state.current_proxy.is_some() {
-        return badge("ready", positive_color(), surface_color());
-    }
-
-    badge("standby", warn_color(), surface_color())
-}
-
-fn telegram_badge(running: bool) -> Span<'static> {
-    if running {
-        badge("telegram on", positive_color(), surface_color())
-    } else {
-        badge("telegram off", warn_color(), surface_color())
-    }
-}
-
-fn autostart_badge(config: &AppConfig, autostart: &windows::AutostartStatus) -> Span<'static> {
-    if autostart.installed || config.autostart.enabled {
-        badge("autostart", accent_color(), surface_color())
-    } else {
-        badge("manual", muted_color(), surface_color())
-    }
-}
-
-fn yes_no(value: bool) -> &'static str {
-    if value { "да" } else { "нет" }
 }
 
 fn compact(value: &str, max: usize) -> String {
@@ -731,8 +579,8 @@ fn compact(value: &str, max: usize) -> String {
         return value.to_string();
     }
 
-    let head = max.saturating_sub(6) / 2;
-    let tail = max.saturating_sub(6) - head;
+    let head = max.saturating_sub(5) / 2;
+    let tail = max.saturating_sub(5) - head;
     let prefix = value.chars().take(head).collect::<String>();
     let suffix = value
         .chars()
@@ -742,92 +590,32 @@ fn compact(value: &str, max: usize) -> String {
         .chars()
         .rev()
         .collect::<String>();
-    format!("{prefix} … {suffix}")
+    format!("{prefix} ... {suffix}")
 }
 
-fn panel(title: &str, accent: bool) -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(if accent {
-            Style::default().fg(accent_color())
-        } else {
-            Style::default().fg(border_color())
-        })
-        .title(title.to_string())
+fn find_action(actions: &[ConsoleAction], needle: ConsoleAction) -> Option<ConsoleAction> {
+    actions.iter().copied().find(|action| *action == needle)
 }
 
-fn accent_color() -> Color {
-    Color::Rgb(77, 208, 255)
+fn yes_no(value: bool) -> &'static str {
+    if value { "да" } else { "нет" }
 }
 
-fn border_color() -> Color {
-    Color::Rgb(50, 74, 89)
+fn mode_label(mode: &WatcherMode) -> &'static str {
+    match mode {
+        WatcherMode::Idle => "idle",
+        WatcherMode::Watching => "watching",
+        WatcherMode::WaitingForTelegram => "waiting",
+        WatcherMode::Switching => "switching",
+        WatcherMode::Error => "error",
+    }
 }
 
-fn text_color() -> Color {
-    Color::Rgb(232, 238, 245)
-}
-
-fn muted_color() -> Color {
-    Color::Rgb(149, 166, 182)
-}
-
-fn positive_color() -> Color {
-    Color::Rgb(104, 211, 145)
-}
-
-fn warn_color() -> Color {
-    Color::Rgb(255, 193, 94)
-}
-
-fn danger_color() -> Color {
-    Color::Rgb(255, 124, 135)
-}
-
-fn surface_color() -> Color {
-    Color::Rgb(15, 23, 30)
-}
-
-fn selection_bg() -> Color {
-    Color::Rgb(19, 45, 58)
-}
-
-fn title_style() -> Style {
-    Style::default()
-        .fg(text_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn value_style() -> Style {
-    Style::default()
-        .fg(accent_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn muted_style() -> Style {
-    Style::default().fg(muted_color())
-}
-
-fn positive_style() -> Style {
-    Style::default()
-        .fg(positive_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn danger_style() -> Style {
-    Style::default()
-        .fg(danger_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn badge(text: &str, fg: Color, bg: Color) -> Span<'static> {
-    Span::styled(
-        text.to_string(),
-        Style::default()
-            .fg(bg)
-            .bg(fg)
-            .add_modifier(Modifier::BOLD),
-    )
+fn autostart_method_label(method: &AutostartMethod) -> &'static str {
+    match method {
+        AutostartMethod::ScheduledTask => "scheduled_task",
+        AutostartMethod::StartupFolder => "startup_folder",
+    }
 }
 
 fn format_time(value: Option<&chrono::DateTime<chrono::Utc>>) -> String {
@@ -841,21 +629,55 @@ fn format_time(value: Option<&chrono::DateTime<chrono::Utc>>) -> String {
         .unwrap_or_else(|| "нет данных".to_string())
 }
 
-fn mode_label(mode: &WatcherMode) -> &'static str {
-    match mode {
-        WatcherMode::Idle => "idle",
-        WatcherMode::Watching => "watching",
-        WatcherMode::WaitingForTelegram => "waiting_for_telegram",
-        WatcherMode::Switching => "switching",
-        WatcherMode::Error => "error",
+fn panel(title: &str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color()))
+        .title(title.to_string())
+}
+
+fn title_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(239, 244, 250))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn text_style() -> Style {
+    Style::default().fg(Color::Rgb(214, 224, 235))
+}
+
+fn subtle_style() -> Style {
+    Style::default().fg(Color::Rgb(133, 149, 165))
+}
+
+fn selected_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(120, 196, 255))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn value_style(selected: bool) -> Style {
+    if selected {
+        Style::default()
+            .fg(Color::Rgb(120, 196, 255))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Rgb(180, 214, 248))
     }
 }
 
-fn autostart_method_label(method: &AutostartMethod) -> &'static str {
-    match method {
-        AutostartMethod::ScheduledTask => "scheduled_task",
-        AutostartMethod::StartupFolder => "startup_folder",
-    }
+fn border_color() -> Color {
+    Color::Rgb(55, 67, 79)
+}
+
+fn badge(text: &str) -> Span<'static> {
+    Span::styled(
+        text.to_string(),
+        Style::default()
+            .fg(Color::Rgb(11, 16, 22))
+            .bg(Color::Rgb(120, 196, 255))
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 struct TerminalSession {
@@ -868,7 +690,10 @@ impl TerminalSession {
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen).context("Не удалось открыть alternate screen")?;
         let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend).context("Не удалось создать TUI-терминал")?;
+        let mut terminal = Terminal::new(backend).context("Не удалось создать TUI-терминал")?;
+        terminal
+            .clear()
+            .context("Не удалось очистить экран терминала")?;
         Ok(Self { terminal })
     }
 }
@@ -931,26 +756,22 @@ impl SetupDraft {
             SetupField {
                 label: "Интервал проверки",
                 value: format!("{} сек", self.check_interval_secs),
-                description:
-                    "Как часто watcher будет проверять текущий proxy и искать замену при деградации.",
+                description: "Как часто watcher будет проверять текущий proxy и искать замену при деградации.",
             },
             SetupField {
                 label: "TCP timeout",
                 value: format!("{} сек", self.connect_timeout_secs),
-                description:
-                    "Сколько ждать ответа от сервера в TCP health-check до признания проверки неудачной.",
+                description: "Сколько ждать ответа от сервера в TCP health-check до признания проверки неудачной.",
             },
             SetupField {
                 label: "Порог сбоев",
                 value: self.failure_threshold.to_string(),
-                description:
-                    "Количество подряд неудачных проверок, после которого ProtoSwitch начнёт ротацию proxy.",
+                description: "Количество подряд неудачных проверок, после которого ProtoSwitch начнёт ротацию proxy.",
             },
             SetupField {
                 label: "История proxy",
                 value: self.history_size.to_string(),
-                description:
-                    "Сколько последних proxy хранить, чтобы избегать мгновенного возврата на тот же сервер.",
+                description: "Сколько последних proxy хранить, чтобы избегать мгновенного возврата на тот же сервер.",
             },
             SetupField {
                 label: "Автозапуск watcher",
@@ -959,8 +780,7 @@ impl SetupDraft {
                 } else {
                     "выкл".to_string()
                 },
-                description:
-                    "Включает фоновый запуск при логине Windows через scheduled_task или startup_folder fallback.",
+                description: "Включает фоновый запуск при логине Windows через scheduled_task или startup_folder fallback.",
             },
         ]
     }
@@ -978,9 +798,10 @@ struct SetupField {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum DashboardAction {
+enum ConsoleAction {
     SwitchNow,
     ApplyPending,
+    CleanupDead,
     WatchControl,
     StopWatcher,
     ToggleAutostart,
@@ -992,7 +813,7 @@ enum DashboardAction {
     Exit,
 }
 
-impl DashboardAction {
+impl ConsoleAction {
     fn label(
         &self,
         config: &AppConfig,
@@ -1000,102 +821,156 @@ impl DashboardAction {
         watcher_online: bool,
     ) -> &'static str {
         match self {
-            DashboardAction::SwitchNow => "Switch proxy",
-            DashboardAction::ApplyPending => "Применить pending",
-            DashboardAction::WatchControl => {
+            ConsoleAction::SwitchNow => "switch now",
+            ConsoleAction::ApplyPending => "apply pending",
+            ConsoleAction::CleanupDead => "cleanup dead proxy",
+            ConsoleAction::WatchControl => {
                 if watcher_online {
-                    "Перезапустить watcher"
+                    "restart watcher"
                 } else {
-                    "Запустить watcher"
+                    "start watcher"
                 }
             }
-            DashboardAction::StopWatcher => "Остановить watcher",
-            DashboardAction::ToggleAutostart => {
+            ConsoleAction::StopWatcher => "stop watcher",
+            ConsoleAction::ToggleAutostart => {
                 if autostart.installed || config.autostart.enabled {
-                    "Выключить автозапуск"
+                    "disable autostart"
                 } else {
-                    "Включить автозапуск"
+                    "enable autostart"
                 }
             }
-            DashboardAction::Settings => "Настройки",
-            DashboardAction::Doctor => "Doctor",
-            DashboardAction::OpenLog => "Открыть watch.log",
-            DashboardAction::OpenDataDir => "Открыть данные",
-            DashboardAction::Refresh => "Обновить снимок",
-            DashboardAction::Exit => "Закрыть",
+            ConsoleAction::Settings => "settings",
+            ConsoleAction::Doctor => "doctor",
+            ConsoleAction::OpenLog => "open log",
+            ConsoleAction::OpenDataDir => "open data folder",
+            ConsoleAction::Refresh => "refresh",
+            ConsoleAction::Exit => "quit",
         }
     }
 
     fn shortcut(&self) -> &'static str {
         match self {
-            DashboardAction::SwitchNow => "[S]",
-            DashboardAction::ApplyPending => "[P]",
-            DashboardAction::WatchControl => "[W]",
-            DashboardAction::StopWatcher => "[X]",
-            DashboardAction::ToggleAutostart => "[A]",
-            DashboardAction::Settings => "[E]",
-            DashboardAction::Doctor => "[D]",
-            DashboardAction::OpenLog => "[L]",
-            DashboardAction::OpenDataDir => "[O]",
-            DashboardAction::Refresh => "[R]",
-            DashboardAction::Exit => "[Q]",
+            ConsoleAction::SwitchNow => "[S]",
+            ConsoleAction::ApplyPending => "[P]",
+            ConsoleAction::CleanupDead => "[C]",
+            ConsoleAction::WatchControl => "[W]",
+            ConsoleAction::StopWatcher => "[X]",
+            ConsoleAction::ToggleAutostart => "[A]",
+            ConsoleAction::Settings => "[E]",
+            ConsoleAction::Doctor => "[D]",
+            ConsoleAction::OpenLog => "[L]",
+            ConsoleAction::OpenDataDir => "[O]",
+            ConsoleAction::Refresh => "[R]",
+            ConsoleAction::Exit => "[Q]",
         }
     }
 
     fn description(
         &self,
         config: &AppConfig,
+        state: &AppState,
         autostart: &windows::AutostartStatus,
         watcher_online: bool,
         paths: &AppPaths,
     ) -> Vec<String> {
         match self {
-            DashboardAction::SwitchNow => vec![
-                "Принудительно запросить новый proxy у mtproto.ru и сразу применить его в Telegram.".to_string(),
-                "Если Telegram открыт, подтверждение proxy выполнится автоматически.".to_string(),
+            ConsoleAction::SwitchNow => vec![
+                "Запросить новый рабочий proxy у mtproto.ru и сразу применить его в Telegram."
+                    .to_string(),
+                "Перед применением кандидат теперь проходит локальную TCP-проверку."
+                    .to_string(),
             ],
-            DashboardAction::ApplyPending => vec![
+            ConsoleAction::ApplyPending => vec![
                 "Применить уже сохранённый pending proxy без нового fetch.".to_string(),
-                "Команда доступна только когда Telegram уже запущен.".to_string(),
+                "Полезно, когда replacement уже найден, а Telegram запустился только сейчас."
+                    .to_string(),
             ],
-            DashboardAction::WatchControl => vec![if watcher_online {
-                "Остановить текущий headless watcher и поднять его заново с актуальным конфигом.".to_string()
+            ConsoleAction::CleanupDead => vec![
+                "Удалить из Telegram мёртвые proxy, которыми ProtoSwitch управлял раньше."
+                    .to_string(),
+                "Очистка идёт через UI Automation по полям Hostname/Port/Secret.".to_string(),
+            ],
+            ConsoleAction::WatchControl => vec![if watcher_online {
+                "Остановить текущий headless watcher и поднять его заново с актуальным конфигом."
+                    .to_string()
             } else {
                 "Запустить headless watcher в фоне без перезапуска интерфейса.".to_string()
             }],
-            DashboardAction::StopWatcher => vec![
-                "Завершить фоновые headless watcher-процессы ProtoSwitch.".to_string(),
-                "UI останется открыт, но автоматическая ротация будет остановлена.".to_string(),
+            ConsoleAction::StopWatcher => vec![
+                "Остановить только фоновые headless watcher-процессы ProtoSwitch.".to_string(),
             ],
-            DashboardAction::ToggleAutostart => vec![if autostart.installed || config.autostart.enabled {
-                "Выключить запуск ProtoSwitch при входе в Windows.".to_string()
+            ConsoleAction::ToggleAutostart => vec![if autostart.installed || config.autostart.enabled
+            {
+                "Отключить запуск ProtoSwitch при логине Windows.".to_string()
             } else {
-                "Включить запуск ProtoSwitch при входе в Windows.".to_string()
+                "Включить запуск ProtoSwitch при логине Windows.".to_string()
             }],
-            DashboardAction::Settings => vec![
-                "Открыть экран настройки watcher и параметров хранения истории.".to_string(),
-                "После сохранения watcher будет перезапущен с новым конфигом.".to_string(),
+            ConsoleAction::Settings => vec![
+                "Изменить интервалы watcher, TCP timeout, порог сбоев, размер истории и автозапуск."
+                    .to_string(),
             ],
-            DashboardAction::Doctor => vec![
-                "Снять оперативную диагностику: tg:// handler, Telegram Desktop, mtproto.ru, файлы, автозапуск.".to_string(),
+            ConsoleAction::Doctor => vec![
+                "Проверить tg:// handler, Telegram Desktop, mtproto.ru, файлы состояния и автозапуск."
+                    .to_string(),
             ],
-            DashboardAction::OpenLog => vec![
-                format!("Открыть журнал в Notepad: {}", paths.log_file.display()),
+            ConsoleAction::OpenLog => vec![format!("Открыть watch.log: {}", paths.log_file.display())],
+            ConsoleAction::OpenDataDir => {
+                vec![format!("Открыть рабочую папку: {}", paths.local_dir.display())]
+            }
+            ConsoleAction::Refresh => vec![
+                "Перечитать state/config и перерисовать интерфейс без побочных действий."
+                    .to_string(),
             ],
-            DashboardAction::OpenDataDir => vec![
-                format!("Открыть рабочую папку данных: {}", paths.local_dir.display()),
-            ],
-            DashboardAction::Refresh => vec![
-                "Перечитать state/config и перерисовать dashboard без побочных действий.".to_string(),
-            ],
-            DashboardAction::Exit => vec![
-                "Закрыть операторский экран. Фоновый watcher продолжит работу, если уже запущен.".to_string(),
+            ConsoleAction::Exit => vec![
+                format!(
+                    "Закрыть интерфейс. Watcher {}.",
+                    if watcher_online {
+                        "продолжит работу в фоне"
+                    } else {
+                        "останется выключенным"
+                    }
+                ),
+                format!(
+                    "Текущий статус proxy: {}",
+                    app::current_proxy_status_text(state)
+                ),
             ],
         }
     }
 }
 
-struct DashboardState {
+fn console_actions(
+    state: &AppState,
+    config: &AppConfig,
+    autostart: &windows::AutostartStatus,
+    watcher_online: bool,
+) -> Vec<ConsoleAction> {
+    let mut actions = vec![
+        ConsoleAction::SwitchNow,
+        ConsoleAction::CleanupDead,
+        ConsoleAction::WatchControl,
+        ConsoleAction::StopWatcher,
+        ConsoleAction::ToggleAutostart,
+        ConsoleAction::Settings,
+        ConsoleAction::Doctor,
+        ConsoleAction::OpenLog,
+        ConsoleAction::OpenDataDir,
+        ConsoleAction::Refresh,
+        ConsoleAction::Exit,
+    ];
+
+    if state.pending_proxy.is_some() && state.watcher.telegram_running {
+        actions.insert(1, ConsoleAction::ApplyPending);
+    }
+
+    if !(autostart.installed || config.autostart.enabled) && !watcher_online {
+        actions.retain(|action| *action != ConsoleAction::StopWatcher);
+    }
+
+    actions
+}
+
+struct ConsoleState {
     focus: usize,
     activity: Vec<String>,
     inspector_title: String,
@@ -1103,10 +978,10 @@ struct DashboardState {
     last_seen_error: Option<String>,
 }
 
-impl DashboardState {
+impl ConsoleState {
     fn push_activity(&mut self, message: String) {
         self.activity.insert(0, message);
-        while self.activity.len() > 7 {
+        while self.activity.len() > 5 {
             self.activity.pop();
         }
     }
@@ -1121,7 +996,7 @@ impl DashboardState {
 
     fn set_inspector(&mut self, title: &str, lines: Vec<Line<'static>>) {
         self.inspector_title = title.to_string();
-        self.inspector_lines = lines.clone();
+        self.inspector_lines = lines;
         self.push_activity(format!("{title}: снимок обновлён"));
     }
 
@@ -1138,7 +1013,7 @@ impl DashboardState {
         if self.activity.is_empty() {
             return vec![
                 Line::from("Интерфейс готов."),
-                Line::from("Здесь появятся результаты команд и сигналы watcher."),
+                Line::from("Здесь появляются результаты команд и сигналы watcher."),
             ];
         }
 
@@ -1146,12 +1021,12 @@ impl DashboardState {
     }
 }
 
-impl Default for DashboardState {
+impl Default for ConsoleState {
     fn default() -> Self {
         Self {
             focus: 0,
             activity: Vec::new(),
-            inspector_title: "Инспектор".to_string(),
+            inspector_title: "Контекст".to_string(),
             inspector_lines: Vec::new(),
             last_seen_error: None,
         }

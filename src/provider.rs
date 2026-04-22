@@ -131,7 +131,9 @@ impl MtProtoProvider {
             .error_for_status()
             .with_context(|| format!("Источник {} вернул ошибку", self.config.source_url))?;
 
-        response.text().context("Не удалось прочитать HTML источника")
+        response
+            .text()
+            .context("Не удалось прочитать HTML источника")
     }
 
     fn inspect_html(&self, html: &str) -> anyhow::Result<HtmlProbe> {
@@ -150,7 +152,8 @@ impl MtProtoProvider {
 }
 
 pub fn parse_tg_link(tg_link: &str) -> anyhow::Result<MtProtoProxy> {
-    let url = url::Url::parse(tg_link).with_context(|| format!("Невалидный tg:// link: {tg_link}"))?;
+    let url =
+        url::Url::parse(tg_link).with_context(|| format!("Невалидный tg:// link: {tg_link}"))?;
     if url.scheme() != "tg" || url.host_str() != Some("proxy") {
         return Err(anyhow!("Ссылка не является tg://proxy"));
     }

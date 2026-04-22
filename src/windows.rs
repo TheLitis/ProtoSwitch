@@ -324,6 +324,9 @@ mod tests {
     #[test]
     fn startup_shortcut_path_uses_lnk_extension() {
         let path = startup_launcher_path().unwrap();
-        assert_eq!(path.extension().and_then(|value| value.to_str()), Some("lnk"));
+        assert_eq!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("lnk")
+        );
     }
 }
