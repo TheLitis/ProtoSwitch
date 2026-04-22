@@ -14,10 +14,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
+use crate::telegram;
 use crate::APP_VERSION;
 use crate::model::{AppConfig, AppState, AutostartMethod, WatcherMode};
 use crate::paths::AppPaths;
-use crate::windows::AutostartStatus;
+use crate::windows;
 
 pub fn stdout_is_terminal() -> bool {
     io::stdout().is_terminal()
@@ -104,15 +105,15 @@ pub fn run_setup(config: AppConfig) -> anyhow::Result<AppConfig> {
     }
 }
 
-pub fn run_status(
-    paths: &AppPaths,
-    config: &AppConfig,
-    state: &AppState,
-    autostart: &AutostartStatus,
-) -> anyhow::Result<()> {
+pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
     let mut session = TerminalSession::new()?;
 
     loop {
+        let config = AppConfig::load(paths)?;
+        let mut state = AppState::load(paths)?;
+        state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
+        let autostart = windows::query_autostart();
+
         session.terminal.draw(|frame| {
             let area = frame.area();
             let outer = Layout::default()

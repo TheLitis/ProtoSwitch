@@ -34,10 +34,17 @@ pub fn check_proxy(proxy: &MtProtoProxy, timeout_secs: u64) -> bool {
 
 #[cfg(windows)]
 pub fn open_proxy_link(proxy: &MtProtoProxy) -> anyhow::Result<()> {
-    let status = Command::new("cmd")
-        .args(["/C", "start", "", &proxy.deep_link()])
+    let status = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &shell_open_command(&proxy.deep_link()),
+        ])
         .status()
-        .context("Не удалось вызвать cmd /C start для tg://proxy")?;
+        .context("Не удалось вызвать PowerShell для tg://proxy")?;
 
     if !status.success() {
         return Err(anyhow!("Telegram не принял tg://proxy"));
@@ -133,8 +140,28 @@ fn common_telegram_paths() -> Vec<PathBuf> {
     values
 }
 
+#[cfg(windows)]
+fn shell_open_command(value: &str) -> String {
+    format!("Start-Process '{}'", value.replace('\'', "''"))
+}
+
 #[derive(Debug, Clone)]
 pub struct TelegramInstallation {
     pub protocol_handler: Option<String>,
     pub executable_path: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn formats_powershell_command_for_tg_link() {
+        let value = shell_open_command("tg://proxy?server=test&port=443&secret=abcd");
+        assert_eq!(
+            value,
+            "Start-Process 'tg://proxy?server=test&port=443&secret=abcd'"
+        );
+    }
 }

@@ -1,9 +1,11 @@
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{Duration as ChronoDuration, Local, Utc};
 use clap::Parser;
+use sysinfo::{ProcessesToUpdate, System};
 
 use crate::cli::{
     AutostartCommand, Cli, Commands, DoctorArgs, InitArgs, StatusArgs, SwitchArgs, WatchArgs,
@@ -34,7 +36,7 @@ pub fn run() -> anyhow::Result<()> {
 
 fn handle_launch(paths: &AppPaths) -> anyhow::Result<()> {
     if !paths.config_file.exists() {
-        return handle_init(
+        handle_init(
             paths,
             InitArgs {
                 non_interactive: !ui::stdout_is_terminal(),
@@ -45,8 +47,10 @@ fn handle_launch(paths: &AppPaths) -> anyhow::Result<()> {
                 failure_threshold: None,
                 history_size: None,
             },
-        );
+        )?;
     }
+
+    ensure_watcher_running(paths)?;
 
     handle_status(
         paths,
@@ -153,9 +157,7 @@ fn handle_watch(paths: &AppPaths, args: WatchArgs) -> anyhow::Result<()> {
 }
 
 fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
-    let config = AppConfig::load(paths)?;
-    let state = AppState::load(paths)?;
-    let autostart = windows::query_autostart();
+    let (config, state, autostart) = load_status_snapshot(paths)?;
 
     if args.json {
         println!(
@@ -171,7 +173,7 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
     }
 
     if !args.plain && ui::stdout_is_terminal() {
-        return ui::run_status(paths, &config, &state, &autostart);
+        return ui::run_status(paths);
     }
 
     print_plain_status(paths, &config, &state, &autostart);
@@ -505,6 +507,81 @@ fn print_plain_status(
     if let Some(error) = &state.last_error {
         println!("Последняя ошибка: {error}");
     }
+}
+
+fn load_status_snapshot(
+    paths: &AppPaths,
+) -> anyhow::Result<(AppConfig, AppState, windows::AutostartStatus)> {
+    let config = AppConfig::load(paths)?;
+    let mut state = AppState::load(paths)?;
+    state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
+    let autostart = windows::query_autostart();
+    Ok((config, state, autostart))
+}
+
+fn ensure_watcher_running(paths: &AppPaths) -> anyhow::Result<()> {
+    let config = AppConfig::load(paths)?;
+    let state = AppState::load(paths)?;
+
+    if watcher_is_recent(&config, &state) || watcher_process_exists() {
+        return Ok(());
+    }
+
+    let executable =
+        std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?;
+    let mut command = Command::new(executable);
+    command.args(["watch", "--headless"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    command
+        .spawn()
+        .context("Не удалось запустить watcher в фоне")?;
+    paths.append_log("launch started watcher")?;
+    Ok(())
+}
+
+fn watcher_is_recent(config: &AppConfig, state: &AppState) -> bool {
+    let Some(last_check_at) = state.watcher.last_check_at else {
+        return false;
+    };
+
+    let threshold = ChronoDuration::seconds(
+        (config.watcher.check_interval_secs.saturating_mul(2) + 15)
+            .try_into()
+            .unwrap_or(75),
+    );
+
+    Utc::now() - last_check_at < threshold
+}
+
+fn watcher_process_exists() -> bool {
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    let current_pid = std::process::id();
+
+    system.processes().values().any(|process| {
+        if process.pid().as_u32() == current_pid {
+            return false;
+        }
+
+        let name = process.name().to_string_lossy().to_ascii_lowercase();
+        if name != "protoswitch.exe" && name != "protoswitch" {
+            return false;
+        }
+
+        let commandline = process
+            .cmd()
+            .iter()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+
+        commandline.iter().any(|value| value == "watch")
+            && commandline.iter().any(|value| value == "--headless")
+    })
 }
 
 fn format_local_time(timestamp: &chrono::DateTime<Utc>) -> String {
