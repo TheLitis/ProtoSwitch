@@ -48,6 +48,8 @@ pub fn run() -> anyhow::Result<()> {
         Some(Commands::Switch(args)) => handle_switch(&paths, args),
         Some(Commands::Cleanup) => handle_cleanup(&paths),
         Some(Commands::Doctor(args)) => handle_doctor(&paths, args),
+        Some(Commands::Repair) => handle_repair(&paths),
+        Some(Commands::Shutdown) => handle_shutdown(&paths),
         Some(Commands::Autostart { command }) => handle_autostart(&paths, command),
         None => handle_launch(&paths),
     }
@@ -68,8 +70,6 @@ fn handle_launch(paths: &AppPaths) -> anyhow::Result<()> {
             },
         )?;
     }
-
-    let _ = ensure_watcher_running(paths)?;
 
     handle_status(
         paths,
@@ -197,6 +197,11 @@ fn handle_cleanup(paths: &AppPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn handle_repair(paths: &AppPaths) -> anyhow::Result<()> {
+    println!("{}", repair_installation(paths)?);
+    Ok(())
+}
+
 fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     let report = doctor_snapshot_v2(paths)?;
     let provider_probe_display = match &report.provider_probe {
@@ -253,6 +258,19 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn handle_shutdown(paths: &AppPaths) -> anyhow::Result<()> {
+    let stopped = stop_all_protoswitch_processes(paths)?;
+    println!(
+        "{}",
+        if stopped == 0 {
+            "Других процессов ProtoSwitch не найдено.".to_string()
+        } else {
+            format!("Остановлено процессов ProtoSwitch: {stopped}")
+        }
+    );
+    Ok(())
+}
+
 fn handle_autostart(paths: &AppPaths, command: AutostartCommand) -> anyhow::Result<()> {
     match command {
         AutostartCommand::Install => {
@@ -290,6 +308,41 @@ fn watch_cycle(
     if state.source_status.trim().is_empty() {
         state.set_source_status("источник ещё не опрашивался");
     }
+    if state.current_proxy.is_none() {
+        state.watcher.mode = WatcherMode::Idle;
+        state.watcher.failure_streak = 0;
+        state.set_current_proxy_status("ещё нет proxy под управлением");
+        state.set_source_status(if state.pending_proxy.is_some() {
+            "есть pending proxy, но нужен ручной apply"
+        } else {
+            "авторотация ждёт первого ручного switch"
+        });
+        state.save(&paths.state_file)?;
+        return Ok(if headless {
+            String::new()
+        } else if state.pending_proxy.is_some() {
+            "Watcher не трогает внешний proxy. Есть pending proxy для ручного применения."
+                .to_string()
+        } else {
+            "Watcher ждёт первого ручного switch и не трогает внешний proxy.".to_string()
+        });
+    }
+    let managed_proxy_healthy = state
+        .current_proxy
+        .as_ref()
+        .map(|record| telegram::check_proxy(&record.proxy, config.watcher.connect_timeout_secs))
+        .unwrap_or(false);
+    if managed_proxy_healthy {
+        if state.pending_proxy.is_some() {
+            state.pending_proxy = None;
+            let _ = paths.append_log("cleared stale pending proxy because current proxy is healthy");
+        }
+        state.watcher.mode = WatcherMode::Watching;
+        state.mark_healthy();
+        state.set_source_status("источник не запрашивался");
+        state.save(&paths.state_file)?;
+        return Ok("Proxy остаётся рабочим.".to_string());
+    }
     if telegram_running {
         if let Some(record) = state.pending_proxy.clone() {
             match apply_proxy_record(
@@ -307,18 +360,6 @@ fn watch_cycle(
                 }
             }
         }
-    }
-    let current_is_healthy = state
-        .current_proxy
-        .as_ref()
-        .map(|record| telegram::check_proxy(&record.proxy, config.watcher.connect_timeout_secs))
-        .unwrap_or(false);
-    if current_is_healthy {
-        state.watcher.mode = WatcherMode::Watching;
-        state.mark_healthy();
-        state.set_source_status("источник не запрашивался");
-        state.save(&paths.state_file)?;
-        return Ok("Proxy остаётся рабочим.".to_string());
     }
     if state.current_proxy.is_some() {
         let failure_streak = state.mark_failure();
@@ -1078,6 +1119,17 @@ fn persist_config_with_restart(
     mut config: AppConfig,
     restart_watcher: bool,
 ) -> anyhow::Result<String> {
+    let watcher_was_online = if restart_watcher {
+        match (AppConfig::load(paths), AppState::load(paths)) {
+            (Ok(current_config), Ok(current_state)) => {
+                watcher_is_recent(&current_config, &current_state) || watcher_process_exists()
+            }
+            _ => watcher_process_exists(),
+        }
+    } else {
+        false
+    };
+
     if config.autostart.enabled {
         let method = windows::install_autostart(
             &std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?,
@@ -1089,7 +1141,7 @@ fn persist_config_with_restart(
     }
 
     config.save(&paths.config_file)?;
-    if restart_watcher {
+    if watcher_was_online {
         let _ = restart_background_watcher(paths);
     }
 
@@ -1115,7 +1167,13 @@ pub(crate) fn ensure_watcher_running(paths: &AppPaths) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-pub(crate) fn stop_background_watcher(paths: &AppPaths) -> anyhow::Result<usize> {
+#[derive(Clone, Copy)]
+enum StopProcessScope {
+    WatchersOnly,
+    AllProtoSwitch,
+}
+
+fn stop_protoswitch_processes(paths: &AppPaths, scope: StopProcessScope) -> anyhow::Result<usize> {
     let mut system = System::new_all();
     system.refresh_processes(ProcessesToUpdate::All, true);
     let current_pid = std::process::id();
@@ -1140,7 +1198,12 @@ pub(crate) fn stop_background_watcher(paths: &AppPaths) -> anyhow::Result<usize>
         let is_headless_watcher = commandline.iter().any(|value| value == "watch")
             && commandline.iter().any(|value| value == "--headless");
 
-        if is_headless_watcher && process.kill() {
+        let should_stop = match scope {
+            StopProcessScope::WatchersOnly => is_headless_watcher,
+            StopProcessScope::AllProtoSwitch => true,
+        };
+
+        if should_stop && process.kill() {
             stopped += 1;
         }
     }
@@ -1153,6 +1216,14 @@ pub(crate) fn stop_background_watcher(paths: &AppPaths) -> anyhow::Result<usize>
     state.save(&paths.state_file)?;
 
     Ok(stopped)
+}
+
+pub(crate) fn stop_background_watcher(paths: &AppPaths) -> anyhow::Result<usize> {
+    stop_protoswitch_processes(paths, StopProcessScope::WatchersOnly)
+}
+
+pub(crate) fn stop_all_protoswitch_processes(paths: &AppPaths) -> anyhow::Result<usize> {
+    stop_protoswitch_processes(paths, StopProcessScope::AllProtoSwitch)
 }
 
 pub(crate) fn restart_background_watcher(paths: &AppPaths) -> anyhow::Result<String> {
@@ -1181,6 +1252,32 @@ fn spawn_background_watcher(paths: &AppPaths) -> anyhow::Result<()> {
         .context("Не удалось запустить watcher в фоне")?;
     paths.append_log("launch started watcher")?;
     Ok(())
+}
+
+pub(crate) fn repair_installation(paths: &AppPaths) -> anyhow::Result<String> {
+    paths.ensure_dirs()?;
+    let stopped = stop_background_watcher(paths).unwrap_or(0);
+    if !paths.state_file.exists() {
+        AppState::default().save(&paths.state_file)?;
+    }
+
+    let config = AppConfig::load(paths)?;
+    let saved = persist_config_with_restart(paths, config, false)?;
+    let doctor = doctor_snapshot_v2(paths)?;
+    let provider = match doctor.provider_probe {
+        Ok(value) => format!("источник доступен ({value})"),
+        Err(error) => format!("источник требует внимания ({error})"),
+    };
+
+    Ok(format!(
+        "{saved}. Остановлено watcher-процессов: {stopped}. tg:// handler: {}. {}.",
+        if doctor.tg_protocol_handler.is_some() {
+            "найден"
+        } else {
+            "не найден"
+        },
+        provider
+    ))
 }
 
 pub(crate) fn watcher_is_recent(config: &AppConfig, state: &AppState) -> bool {

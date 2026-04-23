@@ -537,7 +537,7 @@ function Get-DialogStatus($element) {
     return 'available:' + $labels
   }
   if ([string]::IsNullOrWhiteSpace($labels)) {
-    return 'unknown:dialog visible'
+    return 'unknown:диалог открыт'
   }
   return 'unknown:' + $labels
 }
@@ -546,7 +546,7 @@ Start-Process __LINK__
 $dialog = Wait-ForDialog 6500
 if ($null -eq $dialog) {
   Restore-PreviousWindow $previous
-  Write-Output 'proxy dialog not found'
+  Write-Output 'диалог proxy не найден'
   exit 1
 }
 $check = Find-NamedButton $dialog.Element 'Check|Status|Провер|Статус'
@@ -554,20 +554,20 @@ $requiresPositiveStatus = $null -ne $check
 if ($requiresPositiveStatus) {
   if (-not (Invoke-Element $check)) {
     Restore-PreviousWindow $previous
-    Write-Output 'status check button did not respond'
+    Write-Output 'кнопка проверки статуса не ответила'
     exit 1
   }
   Start-Sleep -Milliseconds 350
 }
 $deadline = [DateTime]::UtcNow.AddMilliseconds(__TIMEOUT_MS__)
-$lastStatus = 'unknown:dialog visible'
+$lastStatus = 'unknown:диалог открыт'
 while ([DateTime]::UtcNow -lt $deadline) {
   $lastStatus = Get-DialogStatus $dialog.Element
   if ($lastStatus.StartsWith('available:')) {
     $primary = Find-PrimaryButton $dialog.Element
     if ($null -eq $primary) {
       Restore-PreviousWindow $previous
-      Write-Output 'confirm button not found'
+      Write-Output 'кнопка подтверждения не найдена'
       exit 1
     }
     if (Invoke-Element $primary) {
@@ -576,7 +576,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
       exit 0
     }
     Restore-PreviousWindow $previous
-    Write-Output 'confirm button did not respond'
+    Write-Output 'кнопка подтверждения не ответила'
     exit 1
   }
   if ($lastStatus.StartsWith('unavailable:')) {
@@ -589,7 +589,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     $primary = Find-PrimaryButton $dialog.Element
     if ($null -eq $primary) {
       Restore-PreviousWindow $previous
-      Write-Output 'confirm button not found'
+      Write-Output 'кнопка подтверждения не найдена'
       exit 1
     }
     if (Invoke-Element $primary) {
@@ -598,7 +598,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
       exit 0
     }
     Restore-PreviousWindow $previous
-    Write-Output 'confirm button did not respond'
+    Write-Output 'кнопка подтверждения не ответила'
     exit 1
   }
   Start-Sleep -Milliseconds 280
@@ -819,7 +819,7 @@ function Get-StatusResult($labels) {
     return 'available:' + $labels
   }
   if ([string]::IsNullOrWhiteSpace($labels)) {
-    return 'unknown:row found'
+    return 'unknown:строка найдена'
   }
   return 'unknown:' + $labels
 }
@@ -833,7 +833,7 @@ if ($null -eq $box) {
 }
 Restore-PreviousWindow $previous
 $deadline = [DateTime]::UtcNow.AddMilliseconds(__TIMEOUT_MS__)
-$best = 'missing:not found'
+$best = 'missing:не найден'
 while ([DateTime]::UtcNow -lt $deadline) {
   $main = Get-MainWindow
   if ($null -eq $main) {
@@ -1335,7 +1335,7 @@ function Get-StatusResult($labels) {
     return 'available:' + $labels
   }
   if ([string]::IsNullOrWhiteSpace($labels)) {
-    return 'unknown:row found'
+    return 'unknown:строка найдена'
   }
   return 'unknown:' + $labels
 }
@@ -1349,7 +1349,7 @@ if ($null -eq $box) {
 }
 Restore-PreviousWindow $previous
 $deadline = [DateTime]::UtcNow.AddMilliseconds(__TIMEOUT_MS__)
-$best = 'missing:not found'
+$best = 'missing:не найден'
 while ([DateTime]::UtcNow -lt $deadline) {
   $main = Get-MainWindow
   if ($null -eq $main) {
