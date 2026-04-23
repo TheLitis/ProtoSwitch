@@ -64,7 +64,7 @@ fn candidate(bytes: &[u8], encoding: &'static Encoding) -> DecodedCandidate {
 }
 
 fn looks_like_utf16(bytes: &[u8]) -> bool {
-    if bytes.len() < 4 || bytes.len() % 2 != 0 {
+    if bytes.len() < 4 || !bytes.len().is_multiple_of(2) {
         return false;
     }
 

@@ -238,13 +238,10 @@ impl MtProtoProvider {
         let mut proxies = Vec::new();
         for entry in self.telegram_link_pattern.find_iter(body) {
             let raw = sanitize_url_fragment(entry.as_str());
-            match parse_telegram_proxy_link(&raw) {
-                Ok(proxy) => {
-                    if !proxies.contains(&proxy) {
-                        proxies.push(proxy);
-                    }
-                }
-                Err(_) => {}
+            if let Ok(proxy) = parse_telegram_proxy_link(&raw)
+                && !proxies.contains(&proxy)
+            {
+                proxies.push(proxy);
             }
         }
 
@@ -363,7 +360,7 @@ pub fn parse_socks5_line(line: &str) -> anyhow::Result<TelegramProxy> {
 fn sanitize_url_fragment(value: &str) -> String {
     value
         .trim()
-        .trim_end_matches(|ch: char| matches!(ch, ')' | ']' | '}' | ',' | ';'))
+        .trim_end_matches([')', ']', '}', ',', ';'])
         .to_string()
 }
 

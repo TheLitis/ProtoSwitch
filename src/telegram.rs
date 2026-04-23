@@ -342,10 +342,10 @@ fn tg_protocol_command() -> Option<String> {
         ),
         (HKEY_CLASSES_ROOT, "tg\\shell\\open\\command"),
     ] {
-        if let Ok(key) = RegKey::predef(root).open_subkey(subkey) {
-            if let Ok(value) = key.get_value::<String, _>("") {
-                return Some(value);
-            }
+        if let Ok(key) = RegKey::predef(root).open_subkey(subkey)
+            && let Ok(value) = key.get_value::<String, _>("")
+        {
+            return Some(value);
         }
     }
     None
@@ -357,21 +357,16 @@ fn tg_protocol_command() -> Option<String> {
 }
 
 fn find_telegram_executable() -> Option<PathBuf> {
-    if let Some(command) = tg_protocol_command() {
-        if let Some(path) = parse_command_path(&command) {
-            if path.exists() {
-                return Some(path);
-            }
-        }
+    if let Some(command) = tg_protocol_command()
+        && let Some(path) = parse_command_path(&command)
+        && path.exists()
+    {
+        return Some(path);
     }
 
-    for candidate in common_telegram_paths() {
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    common_telegram_paths()
+        .into_iter()
+        .find(|candidate| candidate.exists())
 }
 
 fn parse_command_path(command: &str) -> Option<PathBuf> {

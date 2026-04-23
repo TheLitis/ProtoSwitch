@@ -79,15 +79,15 @@ impl TelegramProxy {
                 format!("tg://proxy?{}", serializer.finish())
             }
             ProxyKind::Socks5 => {
-                if let Some(username) = &self.username {
-                    if !username.is_empty() {
-                        serializer.append_pair("user", username);
-                    }
+                if let Some(username) = &self.username
+                    && !username.is_empty()
+                {
+                    serializer.append_pair("user", username);
                 }
-                if let Some(password) = &self.password {
-                    if !password.is_empty() {
-                        serializer.append_pair("pass", password);
-                    }
+                if let Some(password) = &self.password
+                    && !password.is_empty()
+                {
+                    serializer.append_pair("pass", password);
                 }
                 format!("tg://socks?{}", serializer.finish())
             }

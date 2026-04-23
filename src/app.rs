@@ -425,22 +425,22 @@ fn watch_cycle(
         state.save(&paths.state_file)?;
         return Ok("Proxy остаётся рабочим.".to_string());
     }
-    if telegram_running {
-        if let Some(record) = state.pending_proxy.clone() {
-            match apply_proxy_record(
-                paths,
-                config,
-                &mut state,
-                record,
-                "Использован сохранённый pending proxy".to_string(),
-                "Отложенный proxy применён",
-                false,
-            ) {
-                Ok(message) => return Ok(message),
-                Err(error) => {
-                    let message = error.to_string();
-                    let _ = paths.append_log(format!("pending proxy apply rejected: {message}"));
-                }
+    if telegram_running
+        && let Some(record) = state.pending_proxy.clone()
+    {
+        match apply_proxy_record(
+            paths,
+            config,
+            &mut state,
+            record,
+            "Использован сохранённый pending proxy".to_string(),
+            "Отложенный proxy применён",
+            false,
+        ) {
+            Ok(message) => return Ok(message),
+            Err(error) => {
+                let message = error.to_string();
+                let _ = paths.append_log(format!("pending proxy apply rejected: {message}"));
             }
         }
     }
@@ -972,7 +972,7 @@ fn fetch_validated_candidate(
     recent: &[MtProtoProxy],
 ) -> anyhow::Result<ProxyRecord> {
     let mut rejected = recent.to_vec();
-    let max_attempts = config.watcher.history_size.max(3).min(8);
+    let max_attempts = config.watcher.history_size.clamp(3, 8);
     let mut last_error = None;
 
     for _ in 0..max_attempts {
@@ -991,15 +991,19 @@ fn fetch_validated_candidate(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Рабочий proxy не найден")))
 }
 
+struct ApplyFailureState {
+    current_status: String,
+    source_status: String,
+    error_message: String,
+    log_message: String,
+}
+
 fn store_apply_failure(
     paths: &AppPaths,
     config: &AppConfig,
     state: &mut AppState,
     record: &ProxyRecord,
-    current_status: String,
-    source_status: String,
-    error_message: String,
-    log_message: String,
+    failure: ApplyFailureState,
 ) -> anyhow::Result<()> {
     let _ =
         telegram::cleanup_managed_proxies(&config.telegram, std::slice::from_ref(&record.proxy));
@@ -1007,13 +1011,13 @@ fn store_apply_failure(
     state.backend_restart_required = false;
     state.watcher.mode = WatcherMode::Error;
     state.watcher.failure_streak = config.watcher.failure_threshold;
-    state.last_error = Some(error_message);
-    state.set_current_proxy_status(current_status);
-    state.set_source_status(source_status);
+    state.last_error = Some(failure.error_message);
+    state.set_current_proxy_status(failure.current_status);
+    state.set_source_status(failure.source_status);
     state.set_backend_status("тихий backend завершился ошибкой");
     state.push_recent(record.clone(), config.watcher.history_size);
     state.save(&paths.state_file)?;
-    paths.append_log(log_message)?;
+    paths.append_log(failure.log_message)?;
     Ok(())
 }
 
@@ -1052,19 +1056,21 @@ fn apply_proxy_record(
                     config,
                     state,
                     &record,
-                    format!("Тихий backend не смог записать proxy: {details}"),
-                    format!(
-                        "Источник дал кандидата {}, но тихий backend завершился ошибкой: {details}",
-                        record.proxy.short_label()
-                    ),
-                    format!(
-                        "Тихий backend не смог записать proxy: {}",
-                        record.proxy.short_label()
-                    ),
-                    format!(
-                        "тихий backend отклонил proxy {}: {details}",
-                        record.proxy.short_label()
-                    ),
+                    ApplyFailureState {
+                        current_status: format!("Тихий backend не смог записать proxy: {details}"),
+                        source_status: format!(
+                            "Источник дал кандидата {}, но тихий backend завершился ошибкой: {details}",
+                            record.proxy.short_label()
+                        ),
+                        error_message: format!(
+                            "Тихий backend не смог записать proxy: {}",
+                            record.proxy.short_label()
+                        ),
+                        log_message: format!(
+                            "тихий backend отклонил proxy {}: {details}",
+                            record.proxy.short_label()
+                        ),
+                    },
                 )?;
                 return Err(anyhow::anyhow!(
                     "Тихий backend не смог записать proxy: {}",
@@ -1142,19 +1148,21 @@ fn apply_proxy_record(
             config,
             state,
             &record,
-            format!("Telegram не подтвердил добавление proxy: {details}"),
-            format!(
-                "Источник дал кандидата {}, но диалог Telegram завершился ошибкой: {details}",
-                record.proxy.short_label()
-            ),
-            format!(
-                "Telegram не подтвердил добавление proxy: {}",
-                record.proxy.short_label()
-            ),
-            format!(
-                "telegram dialog rejected proxy {} with error {details}",
-                record.proxy.short_label()
-            ),
+            ApplyFailureState {
+                current_status: format!("Telegram не подтвердил добавление proxy: {details}"),
+                source_status: format!(
+                    "Источник дал кандидата {}, но диалог Telegram завершился ошибкой: {details}",
+                    record.proxy.short_label()
+                ),
+                error_message: format!(
+                    "Telegram не подтвердил добавление proxy: {}",
+                    record.proxy.short_label()
+                ),
+                log_message: format!(
+                    "telegram dialog rejected proxy {} with error {details}",
+                    record.proxy.short_label()
+                ),
+            },
         )?;
         return Err(anyhow::anyhow!(
             "Telegram не подтвердил добавление proxy: {}",
@@ -1175,19 +1183,21 @@ fn apply_proxy_record(
                 config,
                 state,
                 &record,
-                format!("Telegram отклонил proxy: {details}"),
-                format!(
-                    "Источник дал кандидата {}, но Telegram показал статус: {details}",
-                    record.proxy.short_label()
-                ),
-                format!(
-                    "Telegram пометил proxy как недоступный: {}",
-                    record.proxy.short_label()
-                ),
-                format!(
-                    "telegram rejected proxy {} with status {details}",
-                    record.proxy.short_label()
-                ),
+                ApplyFailureState {
+                    current_status: format!("Telegram отклонил proxy: {details}"),
+                    source_status: format!(
+                        "Источник дал кандидата {}, но Telegram показал статус: {details}",
+                        record.proxy.short_label()
+                    ),
+                    error_message: format!(
+                        "Telegram пометил proxy как недоступный: {}",
+                        record.proxy.short_label()
+                    ),
+                    log_message: format!(
+                        "telegram rejected proxy {} with status {details}",
+                        record.proxy.short_label()
+                    ),
+                },
             )?;
             Err(anyhow::anyhow!(
                 "Telegram пометил proxy как недоступный: {}",
@@ -1223,19 +1233,21 @@ fn apply_proxy_record(
                 config,
                 state,
                 &record,
-                format!("Telegram не подтвердил подключение proxy: {details}"),
-                format!(
-                    "Источник дал кандидата {}, но Telegram не подтвердил подключение: {details}",
-                    record.proxy.short_label()
-                ),
-                format!(
-                    "Telegram не подтвердил подключение proxy: {}",
-                    record.proxy.short_label()
-                ),
-                format!(
-                    "telegram did not settle proxy {} and returned status {details}",
-                    record.proxy.short_label()
-                ),
+                ApplyFailureState {
+                    current_status: format!("Telegram не подтвердил подключение proxy: {details}"),
+                    source_status: format!(
+                        "Источник дал кандидата {}, но Telegram не подтвердил подключение: {details}",
+                        record.proxy.short_label()
+                    ),
+                    error_message: format!(
+                        "Telegram не подтвердил подключение proxy: {}",
+                        record.proxy.short_label()
+                    ),
+                    log_message: format!(
+                        "telegram did not settle proxy {} and returned status {details}",
+                        record.proxy.short_label()
+                    ),
+                },
             )?;
             Err(anyhow::anyhow!(
                 "Telegram не подтвердил подключение proxy: {}",
@@ -1248,16 +1260,21 @@ fn apply_proxy_record(
                 config,
                 state,
                 &record,
-                "Telegram не сохранил proxy в списке".to_string(),
-                format!(
-                    "Источник дал кандидата {}, но Telegram не сохранил proxy",
-                    record.proxy.short_label()
-                ),
-                format!("Telegram не сохранил proxy: {}", record.proxy.short_label()),
-                format!(
-                    "telegram did not persist proxy {} after apply",
-                    record.proxy.short_label()
-                ),
+                ApplyFailureState {
+                    current_status: "Telegram не сохранил proxy в списке".to_string(),
+                    source_status: format!(
+                        "Источник дал кандидата {}, но Telegram не сохранил proxy",
+                        record.proxy.short_label()
+                    ),
+                    error_message: format!(
+                        "Telegram не сохранил proxy: {}",
+                        record.proxy.short_label()
+                    ),
+                    log_message: format!(
+                        "telegram did not persist proxy {} after apply",
+                        record.proxy.short_label()
+                    ),
+                },
             )?;
             Err(anyhow::anyhow!(
                 "Telegram не сохранил proxy: {}",
@@ -1276,7 +1293,7 @@ fn apply_candidate_with_retries(
     allow_fallback: bool,
 ) -> anyhow::Result<String> {
     let mut rejected = state.recent_proxy_values();
-    let attempts = config.watcher.history_size.max(3).min(6);
+    let attempts = config.watcher.history_size.clamp(3, 6);
     let mut last_error = None;
 
     for _ in 0..attempts {

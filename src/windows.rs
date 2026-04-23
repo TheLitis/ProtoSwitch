@@ -81,24 +81,24 @@ pub fn query_autostart() -> AutostartStatus {
         };
     }
 
-    if let Some(path) = startup_path {
-        if path.exists() {
-            return AutostartStatus {
-                installed: true,
-                method: Some(AutostartMethod::StartupFolder),
-                target: Some(path.display().to_string()),
-            };
-        }
+    if let Some(path) = startup_path
+        && path.exists()
+    {
+        return AutostartStatus {
+            installed: true,
+            method: Some(AutostartMethod::StartupFolder),
+            target: Some(path.display().to_string()),
+        };
     }
 
-    if let Some(path) = legacy_path {
-        if path.exists() {
-            return AutostartStatus {
-                installed: true,
-                method: Some(AutostartMethod::StartupFolder),
-                target: Some(path.display().to_string()),
-            };
-        }
+    if let Some(path) = legacy_path
+        && path.exists()
+    {
+        return AutostartStatus {
+            installed: true,
+            method: Some(AutostartMethod::StartupFolder),
+            target: Some(path.display().to_string()),
+        };
     }
 
     AutostartStatus {

@@ -889,7 +889,7 @@ fn derive_legacy_local_key(salt: &[u8]) -> [u8; 256] {
 }
 
 fn decrypt_local_payload(encrypted: &[u8], auth_key: &[u8; 256]) -> anyhow::Result<Vec<u8>> {
-    if encrypted.len() <= 16 || encrypted.len() % 16 != 0 {
+    if encrypted.len() <= 16 || !encrypted.len().is_multiple_of(16) {
         return Err(anyhow!("Зашифрованная часть Telegram settings повреждена"));
     }
 
@@ -981,7 +981,7 @@ fn prepare_aes_oldmtp(auth_key: &[u8; 256], msg_key: &[u8], send: bool) -> ([u8;
 }
 
 fn aes_ige_encrypt(bytes: &[u8], key: &[u8; 32], iv: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
-    if bytes.len() % 16 != 0 {
+    if !bytes.len().is_multiple_of(16) {
         return Err(anyhow!("AES-IGE требует размер, кратный 16"));
     }
 
@@ -1004,7 +1004,7 @@ fn aes_ige_encrypt(bytes: &[u8], key: &[u8; 32], iv: &[u8; 32]) -> anyhow::Resul
 }
 
 fn aes_ige_decrypt(bytes: &[u8], key: &[u8; 32], iv: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
-    if bytes.len() % 16 != 0 {
+    if !bytes.len().is_multiple_of(16) {
         return Err(anyhow!("AES-IGE требует размер, кратный 16"));
     }
 
@@ -1037,8 +1037,8 @@ fn xor_16(left: &[u8; 16], right: &[u8; 16]) -> [u8; 16] {
 fn settings_file_md5(safe_data: &[u8], version: i32) -> [u8; 16] {
     let mut hasher = Md5::new();
     hasher.update(safe_data);
-    hasher.update(&(safe_data.len() as i32).to_le_bytes());
-    hasher.update(&version.to_le_bytes());
+    hasher.update((safe_data.len() as i32).to_le_bytes());
+    hasher.update(version.to_le_bytes());
     hasher.update(TDF_MAGIC);
     let hash = hasher.finalize();
     hash[..16].try_into().unwrap()
