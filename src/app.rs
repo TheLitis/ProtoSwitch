@@ -19,6 +19,7 @@ use crate::paths::AppPaths;
 use crate::platform;
 use crate::provider::MtProtoProvider;
 use crate::telegram;
+use crate::tray;
 use crate::ui;
 use crate::{APP_NAME, APP_VERSION};
 
@@ -64,6 +65,7 @@ pub fn run() -> anyhow::Result<()> {
         Some(Commands::Doctor(args)) => handle_doctor(&paths, args),
         Some(Commands::Repair) => handle_repair(&paths),
         Some(Commands::Shutdown) => handle_shutdown(&paths),
+        Some(Commands::Tray) => tray::run(&paths),
         Some(Commands::Autostart { command }) => handle_autostart(&paths, command),
         None => handle_launch(&paths),
     }
@@ -278,7 +280,7 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     println!("Статус backend: {}", report.backend_status);
     println!("Путь применения: {}", report.backend_route);
     println!(
-        "Нужен перезапуск Telegram: {}",
+        "Ожидает применения: {}",
         yes_no(report.backend_restart_required)
     );
     println!(
@@ -357,7 +359,6 @@ fn watch_cycle(
 ) -> anyhow::Result<String> {
     let mut state = AppState::load(paths)?;
     let now = Utc::now();
-    let previous_telegram_running = state.watcher.telegram_running;
     let telegram_running = telegram::is_running().unwrap_or(false);
     state.watcher.telegram_running = telegram_running;
     state.watcher.last_check_at = Some(now);
@@ -375,29 +376,12 @@ fn watch_cycle(
         state.set_source_status("источник ещё не опрашивался");
     }
     if state.backend_restart_required {
-        if !previous_telegram_running && telegram_running {
-            state.backend_restart_required = false;
-            state.set_backend_status("managed override принят после перезапуска");
-        } else {
-            state.watcher.mode = WatcherMode::WaitingForTelegram;
-            state.watcher.failure_streak = 0;
-            state.set_current_proxy_status(if telegram_running {
-                "proxy сохранён, ждёт перезапуска Telegram"
-            } else {
-                "proxy сохранён, ждёт запуска Telegram"
-            });
-            if state.source_status.trim().is_empty() {
-                state.set_source_status("replacement proxy уже сохранён в settingss");
-            }
-            state.save(&paths.state_file)?;
-            return Ok(if headless {
-                String::new()
-            } else if telegram_running {
-                "Proxy сохранён в Telegram settings. Нужен перезапуск Telegram.".to_string()
-            } else {
-                "Proxy сохранён в Telegram settings и применится при следующем запуске Telegram."
-                    .to_string()
-            });
+        state.backend_restart_required = false;
+        if state.backend_status.trim().is_empty() {
+            state.set_backend_status("managed settings готовы");
+        }
+        if state.current_proxy_status.contains("перезапуск") {
+            state.set_current_proxy_status("proxy записан в Telegram settings");
         }
     }
     if state.current_proxy.is_none() {
@@ -807,7 +791,7 @@ pub(crate) fn overall_summary_text(state: &AppState) -> String {
 
     if state.pending_proxy.is_some() {
         return if state.watcher.telegram_running {
-            "Есть подготовленный replacement proxy. Его можно применить вручную без нового fetch."
+            "Есть подготовленный replacement proxy. Watcher применит его в ближайшем цикле."
                 .to_string()
         } else {
             "Найден replacement proxy. ProtoSwitch дождётся Telegram и продолжит работу."
@@ -866,7 +850,8 @@ pub(crate) fn next_step_text(state: &AppState) -> String {
     }
 
     if state.pending_proxy.is_some() && state.watcher.telegram_running {
-        return "При желании можно применить pending proxy вручную прямо сейчас.".to_string();
+        return "Оставьте watcher включённым: pending proxy будет применён автоматически."
+            .to_string();
     }
 
     "Никаких действий не требуется.".to_string()

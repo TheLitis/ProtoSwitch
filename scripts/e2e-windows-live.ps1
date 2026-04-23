@@ -500,8 +500,8 @@ try {
 
     $pendingDoctor = Invoke-ProtoSwitch -ExePath $resolvedBinary -AppDataRoot $tempAppData -LocalAppDataRoot $tempLocalAppData -Arguments @('doctor', '--json') | ConvertFrom-Json
     $pendingStatus = Invoke-ProtoSwitch -ExePath $resolvedBinary -AppDataRoot $tempAppData -LocalAppDataRoot $tempLocalAppData -Arguments @('status', '--json') | ConvertFrom-Json
-    if (-not $pendingDoctor.backend_restart_required) {
-        throw 'Pending-сценарий не выставил waiting_for_restart.'
+    if ($pendingDoctor.backend_restart_required) {
+        throw 'Pending-сценарий неожиданно запросил перезапуск Telegram.'
     }
     if ($pendingDoctor.backend_route -notmatch 'settingss') {
         throw "Pending-сценарий не использовал managed settings path: $($pendingDoctor.backend_route)"
@@ -512,33 +512,17 @@ try {
     if ($pendingStatus.state.pending_proxy) {
         throw 'Pending-сценарий не очистил pending proxy после apply.'
     }
-    if ($pendingStatus.state.watcher.mode -ne 'waiting_for_telegram') {
+    if ($pendingStatus.state.watcher.mode -ne 'watching') {
         throw "Pending-сценарий вернул неожиданный watcher.mode: $($pendingStatus.state.watcher.mode)"
     }
     if ([int]$pendingStatus.state.current_proxy.proxy.port -ne $replacementListener.Port) {
         throw "Pending-сценарий записал неожиданный current proxy port: $($pendingStatus.state.current_proxy.proxy.port)"
     }
 
-    Get-Process Telegram -ErrorAction Stop | Stop-Process -Force
-    Start-Sleep -Seconds 2
-    Invoke-ProtoSwitch -ExePath $resolvedBinary -AppDataRoot $tempAppData -LocalAppDataRoot $tempLocalAppData -Arguments @('watch', '--headless', '--once') | Out-Null
-    Start-Process -FilePath $telegramExe | Out-Null
-
-    $deadline = (Get-Date).AddSeconds(20)
-    do {
-        Start-Sleep -Milliseconds 500
-        $telegramBack = Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -First 1
-    } while (-not $telegramBack -and (Get-Date) -lt $deadline)
-
-    if (-not $telegramBack) {
-        throw 'Telegram не поднялся после перезапуска.'
-    }
-
-    Invoke-ProtoSwitch -ExePath $resolvedBinary -AppDataRoot $tempAppData -LocalAppDataRoot $tempLocalAppData -Arguments @('watch', '--headless', '--once') | Out-Null
     $finalDoctor = Invoke-ProtoSwitch -ExePath $resolvedBinary -AppDataRoot $tempAppData -LocalAppDataRoot $tempLocalAppData -Arguments @('doctor', '--json') | ConvertFrom-Json
     $finalStatus = Invoke-ProtoSwitch -ExePath $resolvedBinary -AppDataRoot $tempAppData -LocalAppDataRoot $tempLocalAppData -Arguments @('status', '--json') | ConvertFrom-Json
     if ($finalDoctor.backend_restart_required) {
-        throw 'После рестарта Telegram backend_restart_required не сбросился.'
+        throw 'Managed apply оставил backend_restart_required.'
     }
     if ($finalStatus.state.watcher.mode -ne 'watching') {
         throw "После рестарта watcher.mode не вернулся в watching: $($finalStatus.state.watcher.mode)"

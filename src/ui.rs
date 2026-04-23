@@ -1924,7 +1924,7 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
         Line::from(format!("Статус backend: {}", report.backend_status)),
         Line::from(format!("Путь применения: {}", report.backend_route)),
         Line::from(format!(
-            "Нужен перезапуск Telegram: {}",
+            "Ожидает применения: {}",
             yes_no(report.backend_restart_required)
         )),
         Line::from(format!(
@@ -2765,18 +2765,18 @@ fn preview_sample_snapshot(paths: AppPaths) -> UiSnapshot {
     let state = AppState {
         current_proxy: Some(current),
         pending_proxy: Some(pending),
-        current_proxy_status: "proxy сохранён, ждёт перезапуска Telegram".to_string(),
+        current_proxy_status: "proxy записан в Telegram settings".to_string(),
         source_status: "источник временно пуст, используем сохранённый managed proxy".to_string(),
-        backend_status: "managed enabled / selected proxy".to_string(),
+        backend_status: "managed backend / selected proxy / rotation".to_string(),
         backend_route:
-            "pending until restart / C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
+            "settingss -> C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
                 .to_string(),
-        backend_restart_required: true,
+        backend_restart_required: false,
         last_fetch_at: Some(now),
         last_apply_at: Some(now),
         watcher: WatcherSnapshot {
-            mode: WatcherMode::WaitingForTelegram,
-            failure_streak: 2,
+            mode: WatcherMode::Watching,
+            failure_streak: 0,
             telegram_running: true,
             last_check_at: Some(now),
             next_check_at: Some(now),
@@ -3293,19 +3293,18 @@ mod tests {
         let state = AppState {
             current_proxy: Some(current),
             pending_proxy: Some(pending),
-            current_proxy_status: "proxy сохранён, ждёт перезапуска Telegram".to_string(),
+            current_proxy_status: "proxy записан в Telegram settings".to_string(),
             source_status: "источник временно пуст, используем сохранённый managed proxy"
                 .to_string(),
-            backend_status: "managed enabled / selected proxy".to_string(),
-            backend_route:
-                "pending until restart / C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
-                    .to_string(),
-            backend_restart_required: true,
+            backend_status: "managed backend / selected proxy / rotation".to_string(),
+            backend_route: "settingss -> C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
+                .to_string(),
+            backend_restart_required: false,
             last_fetch_at: Some(now),
             last_apply_at: Some(now),
             watcher: WatcherSnapshot {
-                mode: WatcherMode::WaitingForTelegram,
-                failure_streak: 2,
+                mode: WatcherMode::Watching,
+                failure_streak: 0,
                 telegram_running: true,
                 last_check_at: Some(now),
                 next_check_at: Some(now),
