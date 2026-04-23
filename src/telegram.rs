@@ -2,6 +2,8 @@ use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::{Command, Output};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -50,7 +52,34 @@ pub struct ManagedApplyResult {
     pub fallback_error: Option<String>,
 }
 
+#[cfg(test)]
+fn telegram_running_override() -> &'static Mutex<Option<bool>> {
+    static OVERRIDE: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
+    OVERRIDE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(crate) struct TelegramRunningOverrideGuard;
+
+#[cfg(test)]
+impl Drop for TelegramRunningOverrideGuard {
+    fn drop(&mut self) {
+        *telegram_running_override().lock().unwrap() = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn override_is_running(value: bool) -> TelegramRunningOverrideGuard {
+    *telegram_running_override().lock().unwrap() = Some(value);
+    TelegramRunningOverrideGuard
+}
+
 pub fn is_running() -> anyhow::Result<bool> {
+    #[cfg(test)]
+    if let Some(value) = *telegram_running_override().lock().unwrap() {
+        return Ok(value);
+    }
+
     let mut system = System::new_all();
     system.refresh_processes(ProcessesToUpdate::All, true);
 
@@ -1495,6 +1524,12 @@ fn managed_mode_label(mode: DesktopProxyMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn honors_test_running_override() {
+        let _guard = override_is_running(true);
+        assert!(is_running().unwrap());
+    }
 
     #[test]
     fn parses_probe_status_lines() {
