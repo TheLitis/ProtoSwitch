@@ -137,9 +137,7 @@ function Assert-ReleaseBodyEncoding {
         [Parameter(Mandatory = $true)]
         [string]$Tag,
         [Parameter(Mandatory = $true)]
-        [string]$ExpectedInstaller,
-        [Parameter(Mandatory = $true)]
-        [string]$ExpectedPortable,
+        [string[]]$ExpectedAssets,
         [Parameter(Mandatory = $true)]
         [bool]$ExpectedPrerelease
     )
@@ -164,7 +162,7 @@ function Assert-ReleaseBodyEncoding {
     }
 
     $assetNames = @($release.assets | ForEach-Object { $_.name })
-    foreach ($expectedName in @($ExpectedInstaller, $ExpectedPortable)) {
+    foreach ($expectedName in $ExpectedAssets) {
         if ($assetNames -notcontains $expectedName) {
             throw "Release $Tag is missing asset $expectedName."
         }
@@ -179,16 +177,19 @@ $tag = "v$Version"
 $title = "ProtoSwitch $tag"
 $isPrerelease = $Version.Contains('-')
 $distDir = Join-Path $repoRoot "dist\$Version"
-$installerName = 'ProtoSwitch-Setup-x64.exe'
-$portableName = 'protoswitch-portable-win-x64.zip'
-$installerPath = Join-Path $distDir $installerName
-$portablePath = Join-Path $distDir $portableName
 $changelogPath = Join-Path $repoRoot 'CHANGELOG.md'
+$assetFiles = @(Get-ChildItem $distDir -File | Sort-Object Name)
+$assetNames = @($assetFiles | ForEach-Object { $_.Name })
+$assetPaths = @($assetFiles | ForEach-Object { $_.FullName })
 
-foreach ($path in @($installerPath, $portablePath, $changelogPath)) {
+foreach ($path in @($changelogPath) + $assetPaths) {
     if (-not (Test-Path $path)) {
         throw "Required file not found: $path"
     }
+}
+
+if ($assetPaths.Count -eq 0) {
+    throw "No release assets found in $distDir"
 }
 
 Assert-CommandAvailable -Name 'gh'
@@ -214,19 +215,9 @@ if (Test-ReleaseExists -Tag $tag) {
         $editArgs += '--draft'
     }
     Invoke-Gh -Arguments $editArgs | Out-Null
-    Invoke-Gh -Arguments @('release', 'upload', $tag, $installerPath, $portablePath, '--clobber') | Out-Null
+    Invoke-Gh -Arguments (@('release', 'upload', $tag) + $assetPaths + @('--clobber')) | Out-Null
 } else {
-    $createArgs = @(
-        'release',
-        'create',
-        $tag,
-        $installerPath,
-        $portablePath,
-        '--title',
-        $title,
-        '--notes-file',
-        $notesFile
-    )
+    $createArgs = @('release', 'create', $tag) + $assetPaths + @('--title', $title, '--notes-file', $notesFile)
     if ($isPrerelease) {
         $createArgs += '--prerelease'
     }
@@ -236,6 +227,6 @@ if (Test-ReleaseExists -Tag $tag) {
     Invoke-Gh -Arguments $createArgs | Out-Null
 }
 
-Assert-ReleaseBodyEncoding -Tag $tag -ExpectedInstaller $installerName -ExpectedPortable $portableName -ExpectedPrerelease $isPrerelease
+Assert-ReleaseBodyEncoding -Tag $tag -ExpectedAssets $assetNames -ExpectedPrerelease $isPrerelease
 
 Write-Host "Release $tag is ready."

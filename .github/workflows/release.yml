@@ -1,0 +1,186 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(pkg["version"] for pkg in data["packages"] if pkg["name"]=="protoswitch"))')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify changelog entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "## [${{ steps.meta.outputs.tag }}]" CHANGELOG.md > /dev/null
+
+  windows:
+    needs: metadata
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: Test
+        shell: pwsh
+        run: cargo test --locked
+      - name: Build Windows distribution
+        shell: pwsh
+        run: ./scripts/build-distribution.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: dist/${{ needs.metadata.outputs.version }}/*
+
+  linux:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        if: matrix.arch == 'x64'
+        shell: bash
+        run: cargo test --locked
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked
+      - name: Package portable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/package-portable.py \
+            --repo-root "$PWD" \
+            --version "${{ needs.metadata.outputs.version }}" \
+            --platform linux \
+            --arch "${{ matrix.arch }}" \
+            --binary "$PWD/target/release/protoswitch" \
+            --format tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-artifacts
+          path: dist/${{ needs.metadata.outputs.version }}/*
+
+  macos:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        if: matrix.arch == 'x64'
+        shell: bash
+        run: cargo test --locked
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked
+      - name: Package portable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/package-portable.py \
+            --repo-root "$PWD" \
+            --version "${{ needs.metadata.outputs.version }}" \
+            --platform macos \
+            --arch "${{ matrix.arch }}" \
+            --binary "$PWD/target/release/protoswitch" \
+            --format tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-artifacts
+          path: dist/${{ needs.metadata.outputs.version }}/*
+
+  release:
+    needs: [metadata, windows, linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - name: Assemble release directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.metadata.outputs.version }}"
+          dist_dir="dist/$version"
+          mkdir -p "$dist_dir"
+          find release-artifacts -type f -maxdepth 3 -exec cp {} "$dist_dir/" \;
+          ls -la "$dist_dir"
+      - name: Extract release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          version = "${{ needs.metadata.outputs.version }}"
+          tag = f"v{version}"
+          content = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          match = re.search(rf"(?ms)^## \[{re.escape(tag)}\][^\n]*\n(.*?)(?=^## \[|\Z)", content)
+          if not match:
+              raise SystemExit(f"Release notes for {tag} not found")
+          Path("release-notes.md").write_text(match.group(1).strip(), encoding="utf-8")
+          PY
+      - name: Publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.metadata.outputs.version }}"
+          tag="${{ needs.metadata.outputs.tag }}"
+          dist_dir="dist/$version"
+          title="ProtoSwitch $tag"
+          prerelease_flag=()
+          if [[ "${{ needs.metadata.outputs.prerelease }}" == "true" ]]; then
+            prerelease_flag+=(--prerelease)
+          fi
+
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release edit "$tag" --title "$title" --notes-file release-notes.md "${prerelease_flag[@]}"
+            gh release upload "$tag" "$dist_dir"/* --clobber
+          else
+            gh release create "$tag" "$dist_dir"/* --title "$title" --notes-file release-notes.md "${prerelease_flag[@]}"
+          fi
