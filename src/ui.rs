@@ -506,7 +506,7 @@ fn render_console(
         ConsoleSection::History => render_history_responsive(frame, vertical[2], snapshot, console),
     }
 
-    let footer = Paragraph::new(footer_hint(console.section))
+    let footer = Paragraph::new(footer_hint(console.section, vertical[3].width))
         .style(muted_style())
         .block(panel("Клавиши"));
     frame.render_widget(footer, vertical[3]);
@@ -1967,16 +1967,43 @@ fn section_tabs(section: ConsoleSection) -> Line<'static> {
     Line::from(spans)
 }
 
-fn footer_hint(section: ConsoleSection) -> &'static str {
+fn footer_hint(section: ConsoleSection, width: u16) -> String {
+    let narrow = width < 108;
+    let compact = width < 140;
+
     match section {
         ConsoleSection::Dashboard => {
-            "1-4 разделы  Tab/Left/Right  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+            if narrow {
+                "Tab/←→ разделы  C команды  PgUp/PgDn сигналы  R обновить  Q выход".to_string()
+            } else if compact {
+                "1-4 разделы  Tab/←→  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+                    .to_string()
+            } else {
+                "1-4 разделы  Tab/Left/Right  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+                    .to_string()
+            }
         }
         ConsoleSection::Actions => {
-            "Up/Down выбор  Enter запуск  S switch  W watcher  Z стоп  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+            if narrow {
+                "↑↓ выбор  Enter запуск  PgUp/PgDn сигналы  R обновить  Q выход".to_string()
+            } else if compact {
+                "↑↓ выбор  Enter запуск  S switch  W watcher  Z стоп  R/F5 обновить  Q выход"
+                    .to_string()
+            } else {
+                "Up/Down выбор  Enter запуск  S switch  W watcher  Z стоп  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+                    .to_string()
+            }
         }
         ConsoleSection::Providers | ConsoleSection::History => {
-            "1-4 разделы  Tab/Left/Right  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+            if narrow {
+                "Tab/←→ разделы  C команды  PgUp/PgDn сигналы  R обновить  Q выход".to_string()
+            } else if compact {
+                "1-4 разделы  Tab/←→  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+                    .to_string()
+            } else {
+                "1-4 разделы  Tab/Left/Right  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
+                    .to_string()
+            }
         }
     }
 }
@@ -3114,7 +3141,16 @@ mod tests {
                 < actions
                     .iter()
                     .position(|action| *action == ConsoleAction::StopAll)
-                    .unwrap()
+                .unwrap()
         );
+    }
+
+    #[test]
+    fn compacts_footer_for_narrow_width() {
+        let footer = footer_hint(ConsoleSection::Dashboard, 90);
+
+        assert!(footer.contains("Tab/←→"));
+        assert!(footer.contains("R обновить"));
+        assert!(!footer.contains("Left/Right"));
     }
 }
