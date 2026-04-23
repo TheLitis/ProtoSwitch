@@ -2,7 +2,7 @@
 
 Этот файл нужен только для выпуска релизов ProtoSwitch.
 
-## Что Должно Попасть В `v0.2.0-beta.1`
+## Что Должно Попасть В `v0.2.0-beta.2`
 
 - `ProtoSwitch-Setup-x64.exe`
 - `protoswitch-portable-win-x64.zip`
@@ -19,22 +19,25 @@
 3. Соберите Windows-артефакты локально:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-distribution.ps1`
 4. Прогоните portable smoke:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-portable.ps1 -Version 0.2.0-beta.1`
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-portable.ps1 -Version 0.2.0-beta.2`
 5. Прогоните installer smoke на чистой Windows-сессии:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-installer.ps1 -Mode CurrentUser`
 6. Если нужна machine-wide проверка, используйте повышенный PowerShell:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-installer.ps1 -Mode Both`
+7. Linux/macOS portable smoke теперь идёт через CI-скрипт:
+   `python3 scripts/smoke-unix.py --repo-root <repo> --version 0.2.0-beta.2 --platform linux --arch x64`
 
 ## Основной Путь Публикации
 
 Основной путь теперь такой:
 
 1. Закоммитьте релизные изменения.
-2. Создайте подписанный тег `v0.2.0-beta.1`.
+2. Создайте подписанный тег `v0.2.0-beta.2`.
 3. Запушьте `main` и тег.
 4. GitHub Actions workflow `.github/workflows/release.yml` сам:
    - проверит наличие записи в `CHANGELOG.md`;
    - соберёт Windows x64, Linux x64/arm64 и macOS x64/arm64;
+   - прогонит Windows/Linux/macOS smoke там, где это возможно автоматически;
    - упакует все portable-артефакты;
    - создаст или обновит GitHub Release.
 

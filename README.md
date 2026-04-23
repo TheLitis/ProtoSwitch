@@ -1,6 +1,6 @@
-# ProtoSwitch
+﻿# ProtoSwitch
 
-**ProtoSwitch v0.2.0-beta.1** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и тихо пишет новый managed proxy в настройки Telegram без popup и без focus stealing.
+**ProtoSwitch v0.2.0-beta.2** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и тихо пишет новый managed proxy в настройки Telegram без popup и без focus stealing.
 
 ## Что Есть Сейчас
 
@@ -23,7 +23,7 @@
 | `protoswitch-portable-macos-x64.tar.gz` | portable для macOS x64 |
 | `protoswitch-portable-macos-arm64.tar.gz` | portable для macOS arm64 |
 
-Windows installer остаётся только для Windows. Linux и macOS в этой очереди идут как portable-first beta.
+Windows installer остаётся только для Windows. Linux и macOS в этой очереди идут как portable-first beta с CI-smoke на `init`, `status`, `doctor` и `autostart`.
 
 ## Как Работает
 
@@ -42,6 +42,14 @@ flowchart TD
 ```
 
 Фоновый watcher не должен поднимать Telegram поверх других окон. Если клиент уже открыт, ProtoSwitch сохраняет новый proxy в managed subset и честно показывает, что он ждёт следующего запуска Telegram.
+
+## Как Читать Статусы
+
+- `active` — текущий managed proxy проходит проверку и остаётся рабочим.
+- `saved to managed settings` — replacement proxy уже сохранён в `settingss`.
+- `waiting_for_restart` — Telegram открыт, поэтому новый proxy применится после перезапуска клиента.
+- `source empty / no free proxies` — источник сейчас пуст или временно не смог выдать новый proxy.
+- `manual fallback unavailable` — live fallback сейчас не сработал, но managed settings уже записаны и не потеряны.
 
 ## Быстрый Старт
 
@@ -124,6 +132,7 @@ data_dir = ""
 ## Ограничения Beta
 
 - поддерживается только `Telegram Desktop`;
-- Linux/macOS сейчас portable-first и всё ещё считаются beta-grade веткой;
-- фоновый watcher не делает true live-switch для уже открытого Telegram, а использует честную схему `silent save + next launch`;
-- бесплатные proxy по природе нестабильны, поэтому это всё ещё beta, а не stable.
+- Linux/macOS уже проходят portable-first smoke в CI, но всё ещё идут без native installer;
+- фоновый watcher для уже открытого Telegram не делает true live-switch, а использует честную схему `silent save + next launch`;
+- live fallback остаётся только для явных ручных действий `switch` и `repair`, и статус честно покажет, если fallback недоступен;
+- бесплатные proxy и сами публичные источники по природе нестабильны, поэтому приложение всё ещё остаётся beta, а не stable.

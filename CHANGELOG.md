@@ -2,6 +2,31 @@
 
 Все заметные изменения проекта ProtoSwitch будут отражаться в этом файле.
 
+## [v0.2.0-beta.2] - 2026-04-23
+
+Beta-релиз hardening-очереди: Windows-friendly UTF-8 доведён до практического состояния для PowerShell и installer-текстов, managed backend стал строже различать `active / saved / waiting_for_restart / source empty / manual fallback unavailable`, а Linux/macOS portable-ветка получила реальный smoke-слой в CI вместо compile-only отношения.
+
+### Added
+
+- Добавлен `scripts/smoke-unix.py` для portable smoke на Linux/macOS с проверкой `init`, `status`, `doctor`, `autostart install/remove` и OS-specific путей.
+- В unit-тесты добавлена загрузка `config.toml` и `state.json` из UTF-8 BOM файлов.
+- В TUI-тесты добавлена отдельная проверка переноса длинных русских статусов.
+
+### Changed
+
+- Загрузка `config.toml` и `state.json` теперь идёт через единый decode-слой, а не через прямой `read_to_string`, поэтому старые BOM/NUL/cp1251/ibm866 кейсы реже ломают runtime.
+- Background apply больше не превращает неудачный manual fallback в ложный hard error: managed settings сохраняются, а статус честно показывает `ручной fallback недоступен`.
+- Plain status, doctor и watcher-статусы стали строже различать `активен`, `ждёт перезапуска Telegram`, `источник пуст`, `кандидат отклонён локальной проверкой` и `источник недоступен`.
+- Responsive TUI теперь аккуратнее переносит длинные значения в `Dashboard`, `Providers` и `History` вместо агрессивного middle-ellipsis.
+- Windows smoke-скрипты проверяют отсутствие mojibake в plain output и bundled docs.
+- GitHub Actions release matrix теперь не только собирает Linux/macOS portable-артефакты, но и реально прогоняет их smoke-сценарии; все build jobs идут с `RUSTFLAGS=-Dwarnings`.
+- README, CHANGELOG, quickstart-файлы и installer-текст подготовлены к BOM-safe UTF-8 потоку для Windows PowerShell.
+
+### Notes
+
+- Контракт для уже открытого Telegram не изменился: watcher по-прежнему использует только `silent save + next launch`.
+- Linux/macOS остаются portable-first beta-веткой, но теперь это уже smoke-проверяемая ветка, а не просто compile-only упаковка.
+
 ## [v0.2.0-beta.1] - 2026-04-23
 
 Beta-релиз, который переводит ProtoSwitch из чисто Windows-first прототипа в более широкую multi-platform beta-ветку: watcher теперь придерживается честной схемы `silent save + next launch` для уже открытого Telegram, TUI стал адаптивным и заметно спокойнее на узких окнах, release flow разделён на Windows installer и portable-артефакты для Windows, Linux и macOS, а GitHub Actions собирает и публикует все эти варианты автоматически.
