@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod model;
+mod platform;
 mod paths;
 mod provider;
 mod tdesktop;
