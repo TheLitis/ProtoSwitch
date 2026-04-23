@@ -542,7 +542,7 @@ fn render_console(
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
+            Constraint::Length(4),
             Constraint::Length(3),
             Constraint::Min(14),
             Constraint::Length(3),
@@ -1093,14 +1093,9 @@ fn width_mode(width: u16) -> WidthMode {
     }
 }
 
-fn render_session_header(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    snapshot: &UiSnapshot,
-) {
+fn render_session_header(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &UiSnapshot) {
     let current_status = app::current_proxy_status_text(&snapshot.state);
     let summary = app::overall_summary_text(&snapshot.state);
-    let background = app::background_summary_text(&snapshot.state);
     let panel = panel("Сеанс");
     let inner = panel.inner(area);
     frame.render_widget(panel, area);
@@ -1113,10 +1108,6 @@ fn render_session_header(
                     compact_to_width(&summary, inner.width, 12),
                     semantic_style(&summary),
                 ),
-            ]),
-            Line::from(vec![
-                Span::styled("Фон        ", muted_style()),
-                Span::styled(compact_to_width(&background, inner.width, 12), text_style()),
             ]),
         ])
         .wrap(Wrap { trim: true }),
@@ -1194,7 +1185,6 @@ fn render_dashboard_responsive(
     console: &ConsoleState,
 ) {
     let overall_summary = app::overall_summary_text(&snapshot.state);
-    let background_summary = app::background_summary_text(&snapshot.state);
     let next_step = app::next_step_text(&snapshot.state);
     let proxy_status = app::current_proxy_status_text(&snapshot.state);
     let source_status = app::source_status_text(&snapshot.state);
@@ -1279,16 +1269,8 @@ fn render_dashboard_responsive(
             },
             width,
         ));
-        lines.extend(kv_lines(
-            "Backend",
-            backend_status.clone(),
-            width,
-        ));
-        lines.extend(kv_lines(
-            "Путь",
-            backend_route.clone(),
-            width,
-        ));
+        lines.extend(kv_lines("Backend", backend_status.clone(), width));
+        lines.extend(kv_lines("Путь", backend_route.clone(), width));
         lines.extend(kv_lines(
             "Рестарт",
             if snapshot.state.backend_restart_required {
@@ -1314,58 +1296,10 @@ fn render_dashboard_responsive(
             app::enabled_sources_summary(&snapshot.config),
             width,
         ));
-        lines.extend(kv_lines(
-            "Готовн.",
-            format!("{ready_count}/3"),
-            width,
-        ));
+        lines.extend(kv_lines("Готовн.", format!("{ready_count}/3"), width));
         lines.extend(kv_lines(
             "Проверка",
             format_time(snapshot.state.watcher.next_check_at.as_ref()),
-            width,
-        ));
-        lines
-    };
-
-    let comfort_lines = |width: u16| {
-        let mut lines = Vec::new();
-        lines.extend(kv_lines("Фон", background_summary.clone(), width));
-        lines.extend(kv_lines(
-            "Автозап.",
-            if snapshot.autostart.installed || snapshot.config.autostart.enabled {
-                snapshot
-                    .autostart
-                    .method
-                    .as_ref()
-                    .map(autostart_method_label)
-                    .unwrap_or("pending")
-                    .to_string()
-            } else {
-                "выключен".to_string()
-            },
-            width,
-        ));
-        lines.extend(kv_lines(
-            "Чистка",
-            if snapshot.config.watcher.auto_cleanup_dead_proxies {
-                "включена".to_string()
-            } else {
-                "выключена".to_string()
-            },
-            width,
-        ));
-        lines.extend(kv_lines(
-            "SOCKS5",
-            if snapshot.config.provider.enable_socks5_fallback {
-                "fallback включён".to_string()
-            } else {
-                "fallback выключен".to_string()
-            },
-            width,
-        ));
-        lines.extend(kv_lines(
-            "ОС",
-            platform::current_os_label().to_string(),
             width,
         ));
         lines
@@ -1376,15 +1310,27 @@ fn render_dashboard_responsive(
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(6),
-                    Constraint::Length(7),
-                    Constraint::Length(7),
-                    Constraint::Length(7),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
                     Constraint::Min(6),
                 ])
                 .split(area);
-            render_lines_panel(frame, rows[0], "Сейчас", &overall_summary, overview_lines(rows[0].width));
-            render_lines_panel(frame, rows[1], "Proxy", &proxy_status, proxy_lines(rows[1].width));
+            render_lines_panel(
+                frame,
+                rows[0],
+                "Сейчас",
+                &overall_summary,
+                overview_lines(rows[0].width),
+            );
+            render_lines_panel(
+                frame,
+                rows[1],
+                "Proxy",
+                &proxy_status,
+                proxy_lines(rows[1].width),
+            );
             render_lines_panel(
                 frame,
                 rows[2],
@@ -1405,51 +1351,7 @@ fn render_dashboard_responsive(
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(6),
-                    Constraint::Length(7),
-                    Constraint::Length(8),
-                    Constraint::Min(6),
-                ])
-                .split(area);
-            let middle = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(rows[1]);
-            let bottom = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(rows[2]);
-            render_lines_panel(frame, rows[0], "Сейчас", &overall_summary, overview_lines(rows[0].width));
-            render_lines_panel(frame, middle[0], "Proxy", &proxy_status, proxy_lines(middle[0].width));
-            render_lines_panel(
-                frame,
-                middle[1],
-                "Telegram",
-                &backend_status,
-                telegram_lines(middle[1].width),
-            );
-            render_lines_panel(
-                frame,
-                bottom[0],
-                "Источники",
-                &source_status,
-                source_lines(bottom[0].width),
-            );
-            render_lines_panel(
-                frame,
-                bottom[1],
-                "Тихий режим",
-                &background_summary,
-                comfort_lines(bottom[1].width),
-            );
-            render_activity_panel(frame, rows[3], console);
-        }
-        WidthMode::Wide => {
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(6),
-                    Constraint::Length(8),
+                    Constraint::Length(5),
                     Constraint::Length(8),
                     Constraint::Min(6),
                 ])
@@ -1462,12 +1364,20 @@ fn render_dashboard_responsive(
                     Constraint::Percentage(33),
                 ])
                 .split(rows[1]);
-            let bottom = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(rows[2]);
-            render_lines_panel(frame, rows[0], "Сейчас", &overall_summary, overview_lines(rows[0].width));
-            render_lines_panel(frame, middle[0], "Proxy", &proxy_status, proxy_lines(middle[0].width));
+            render_lines_panel(
+                frame,
+                rows[0],
+                "Сейчас",
+                &overall_summary,
+                overview_lines(rows[0].width),
+            );
+            render_lines_panel(
+                frame,
+                middle[0],
+                "Proxy",
+                &proxy_status,
+                proxy_lines(middle[0].width),
+            );
             render_lines_panel(
                 frame,
                 middle[1],
@@ -1482,14 +1392,54 @@ fn render_dashboard_responsive(
                 &source_status,
                 source_lines(middle[2].width),
             );
+            render_activity_panel(frame, rows[2], console);
+        }
+        WidthMode::Wide => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(5),
+                    Constraint::Length(8),
+                    Constraint::Min(6),
+                ])
+                .split(area);
+            let middle = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(rows[1]);
             render_lines_panel(
                 frame,
-                bottom[0],
-                "Тихий режим",
-                &background_summary,
-                comfort_lines(bottom[0].width),
+                rows[0],
+                "Сейчас",
+                &overall_summary,
+                overview_lines(rows[0].width),
             );
-            render_activity_panel(frame, bottom[1], console);
+            render_lines_panel(
+                frame,
+                middle[0],
+                "Proxy",
+                &proxy_status,
+                proxy_lines(middle[0].width),
+            );
+            render_lines_panel(
+                frame,
+                middle[1],
+                "Telegram",
+                &backend_status,
+                telegram_lines(middle[1].width),
+            );
+            render_lines_panel(
+                frame,
+                middle[2],
+                "Источники",
+                &source_status,
+                source_lines(middle[2].width),
+            );
+            render_activity_panel(frame, rows[2], console);
         }
     }
 }
@@ -3381,17 +3331,18 @@ mod tests {
         let rendered = render_console_text(120, 34, ConsoleSection::Dashboard);
 
         assert!(rendered.contains("Итог"));
-        assert!(rendered.contains("Фон"));
-        assert!(rendered.contains("сохранён тихо") || rendered.contains("перезапуска Telegram"));
+        assert!(rendered.contains("записан в Telegram") || rendered.contains("сохранён"));
     }
 
     #[test]
-    fn renders_regular_dashboard_with_comfort_panel() {
+    fn renders_regular_dashboard_without_status_overload() {
         let rendered = render_console_text(120, 34, ConsoleSection::Dashboard);
 
-        assert!(rendered.contains("Тихий режим"));
         assert!(rendered.contains("Дальше"));
-        assert!(rendered.contains("Автозап."));
+        assert!(rendered.contains("Proxy"));
+        assert!(rendered.contains("Telegram"));
+        assert!(rendered.contains("Источники"));
+        assert!(!rendered.contains("Тихий режим"));
     }
 
     #[test]
@@ -3409,7 +3360,7 @@ mod tests {
                 < actions
                     .iter()
                     .position(|action| *action == ConsoleAction::StopAll)
-                .unwrap()
+                    .unwrap()
         );
     }
 

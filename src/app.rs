@@ -195,7 +195,7 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(&status_snapshot_json_value(&config, &state, &autostart))
-            .context("Не удалось сериализовать status")?
+                .context("Не удалось сериализовать status")?
         );
         return Ok(());
     }
@@ -436,9 +436,7 @@ fn watch_cycle(
         state.save(&paths.state_file)?;
         return Ok("Proxy остаётся рабочим.".to_string());
     }
-    if telegram_running
-        && let Some(record) = state.pending_proxy.clone()
-    {
+    if telegram_running && let Some(record) = state.pending_proxy.clone() {
         match apply_proxy_record(
             paths,
             config,
@@ -761,11 +759,11 @@ pub(crate) fn current_proxy_status_text(state: &AppState) -> String {
     }
 
     if state.backend_restart_required {
-        return "ждёт перезапуска Telegram".to_string();
+        return "сохранён, ждёт применения".to_string();
     }
 
     if state.pending_proxy.is_some() {
-        return "есть pending proxy".to_string();
+        return "есть резерв".to_string();
     }
 
     if state.current_proxy.is_some() {
@@ -789,17 +787,14 @@ pub(crate) fn overall_summary_text(state: &AppState) -> String {
 
     if state.backend_restart_required {
         return if state.watcher.telegram_running {
-            "Новый proxy уже сохранён тихо. Он применится после перезапуска Telegram."
-                .to_string()
+            "Новый proxy записан в Telegram. ProtoSwitch продолжит проверку состояния.".to_string()
         } else {
-            "Proxy уже сохранён в managed settings и применится при следующем запуске Telegram."
-                .to_string()
+            "Proxy записан в Telegram settings и готов к следующей проверке.".to_string()
         };
     }
 
     if matches!(state.watcher.mode, WatcherMode::Error) {
-        return "Watcher упёрся в ошибку и ждёт следующего цикла или ручной проверки."
-            .to_string();
+        return "Watcher упёрся в ошибку и ждёт следующего цикла или ручной проверки.".to_string();
     }
 
     if status_contains_any(
@@ -815,12 +810,13 @@ pub(crate) fn overall_summary_text(state: &AppState) -> String {
             "Есть подготовленный replacement proxy. Его можно применить вручную без нового fetch."
                 .to_string()
         } else {
-            "Найден replacement proxy. ProtoSwitch дождётся Telegram и не будет мешать работе."
+            "Найден replacement proxy. ProtoSwitch дождётся Telegram и продолжит работу."
                 .to_string()
         };
     }
 
-    if status_contains_any(&source_status, &["источник пуст", "нет свободных"]) {
+    if status_contains_any(&source_status, &["источник пуст", "нет свободных"])
+    {
         return "Сейчас свежего proxy нет. ProtoSwitch продолжит поиск в фоне.".to_string();
     }
 
@@ -839,21 +835,18 @@ pub(crate) fn overall_summary_text(state: &AppState) -> String {
 pub(crate) fn background_summary_text(state: &AppState) -> String {
     if state.backend_restart_required {
         return if state.watcher.telegram_running {
-            "Тихо в фоне: перезапустите Telegram, когда будет удобно."
-                .to_string()
+            "Фоновый режим активен. Telegram не открывается поверх других окон.".to_string()
         } else {
-            "Тихо в фоне: replacement уже сохранён и ждёт запуска Telegram."
-                .to_string()
+            "Replacement сохранён и будет проверен после запуска Telegram.".to_string()
         };
     }
 
     if matches!(state.watcher.mode, WatcherMode::Idle) {
-        return "Watcher остановлен, ProtoSwitch не вмешивается в Telegram."
-            .to_string();
+        return "Watcher остановлен, ProtoSwitch не вмешивается в Telegram.".to_string();
     }
 
     if state.watcher.telegram_running {
-        "Watcher работает тихо: без popup и без захвата фокуса.".to_string()
+        "Watcher работает в фоне: без popup и без захвата фокуса.".to_string()
     } else {
         "ProtoSwitch спокойно ждёт Telegram и может готовить replacement заранее.".to_string()
     }
@@ -861,7 +854,7 @@ pub(crate) fn background_summary_text(state: &AppState) -> String {
 
 pub(crate) fn next_step_text(state: &AppState) -> String {
     if state.backend_restart_required && state.watcher.telegram_running {
-        return "Когда будет удобно, перезапустите Telegram.".to_string();
+        return "Оставьте ProtoSwitch включённым: он продолжит контроль proxy.".to_string();
     }
 
     if state.current_proxy.is_none() && state.pending_proxy.is_none() {
@@ -934,7 +927,7 @@ pub(crate) fn backend_status_text(
     managed
         .map(|status| {
             format!(
-                "тихий backend / {} / {}",
+                "managed backend / {} / {}",
                 status.mode_label, status.selected_label
             )
         })
@@ -1872,7 +1865,7 @@ mod tests {
     use crate::model::{AppState, ProxyRecord, TelegramProxy, WatcherMode, WatcherSnapshot};
 
     #[test]
-    fn summarizes_quiet_restart_flow() {
+    fn summarizes_managed_background_flow() {
         let state = AppState {
             current_proxy: Some(ProxyRecord::new(
                 TelegramProxy::mtproto(
@@ -1890,11 +1883,11 @@ mod tests {
             ..AppState::default()
         };
 
-        assert!(overall_summary_text(&state).contains("сохранён тихо"));
-        assert!(background_summary_text(&state).contains("Тихо в фоне"));
+        assert!(overall_summary_text(&state).contains("записан в Telegram"));
+        assert!(background_summary_text(&state).contains("Фоновый режим"));
         assert_eq!(
             next_step_text(&state),
-            "Когда будет удобно, перезапустите Telegram."
+            "Оставьте ProtoSwitch включённым: он продолжит контроль proxy."
         );
     }
 
