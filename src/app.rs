@@ -828,25 +828,23 @@ pub(crate) fn overall_summary_text(state: &AppState) -> String {
 pub(crate) fn background_summary_text(state: &AppState) -> String {
     if state.backend_restart_required {
         return if state.watcher.telegram_running {
-            "Без popup и без захвата фокуса: просто перезапустите Telegram, когда будет удобно."
+            "Тихо в фоне: перезапустите Telegram, когда будет удобно."
                 .to_string()
         } else {
-            "Без popup и без захвата фокуса: replacement уже сохранён и ждёт запуска Telegram."
+            "Тихо в фоне: replacement уже сохранён и ждёт запуска Telegram."
                 .to_string()
         };
     }
 
     if matches!(state.watcher.mode, WatcherMode::Idle) {
-        return "Watcher сейчас остановлен, так что ProtoSwitch вообще не вмешивается в работу Telegram."
+        return "Watcher остановлен, ProtoSwitch не вмешивается в Telegram."
             .to_string();
     }
 
     if state.watcher.telegram_running {
-        "Watcher не поднимает Telegram поверх окон и не просит подтверждений сам по себе."
-            .to_string()
+        "Watcher работает тихо: без popup и без захвата фокуса.".to_string()
     } else {
-        "ProtoSwitch спокойно ждёт следующего запуска Telegram и может готовить replacement заранее."
-            .to_string()
+        "ProtoSwitch спокойно ждёт Telegram и может готовить replacement заранее.".to_string()
     }
 }
 
@@ -1882,7 +1880,7 @@ mod tests {
         };
 
         assert!(overall_summary_text(&state).contains("сохранён тихо"));
-        assert!(background_summary_text(&state).contains("Без popup"));
+        assert!(background_summary_text(&state).contains("Тихо в фоне"));
         assert_eq!(
             next_step_text(&state),
             "Когда будет удобно, перезапустите Telegram."
@@ -1900,7 +1898,7 @@ mod tests {
         };
 
         assert!(overall_summary_text(&state).contains("Watcher остановлен"));
-        assert!(background_summary_text(&state).contains("вообще не вмешивается"));
+        assert!(background_summary_text(&state).contains("не вмешивается"));
         assert!(next_step_text(&state).contains("Запустите watcher"));
     }
 }

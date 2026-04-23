@@ -10,7 +10,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{CrosstermBackend, TestBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -18,7 +18,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem,
 
 use crate::APP_VERSION;
 use crate::app;
-use crate::model::{AppConfig, AppState, AutostartMethod, ProxyKind, WatcherMode};
+use crate::model::{
+    AppConfig, AppState, AutostartMethod, ProxyKind, ProxyRecord, TelegramBackendMode,
+    TelegramProxy, WatcherMode, WatcherSnapshot,
+};
 use crate::paths::AppPaths;
 use crate::platform;
 
@@ -317,6 +320,35 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+pub fn render_preview(
+    width: u16,
+    height: u16,
+    section: &str,
+    sample: bool,
+) -> anyhow::Result<String> {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend)?;
+    let paths = if sample {
+        preview_fixture_paths()
+    } else {
+        AppPaths::resolve()?
+    };
+    let snapshot = if sample {
+        preview_sample_snapshot(paths.clone())
+    } else {
+        UiSnapshot::load(&paths)?
+    };
+    let console = ConsoleState {
+        section: parse_preview_section(section)?,
+        ..ConsoleState::default()
+    };
+    let actions = console_actions(&snapshot);
+
+    terminal.draw(|frame| render_console(frame, &paths, &snapshot, &console, &actions))?;
+
+    Ok(buffer_to_string(terminal.backend().buffer()))
 }
 
 fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
@@ -2136,19 +2168,32 @@ fn find_action(actions: &[ConsoleAction], needle: ConsoleAction) -> Option<Conso
     actions.iter().copied().find(|action| *action == needle)
 }
 
+fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
+    let area = buffer.area;
+    let mut lines = Vec::new();
+    for y in 0..area.height {
+        let mut line = String::new();
+        for x in 0..area.width {
+            line.push_str(buffer[(x, y)].symbol());
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
 fn kv_line(label: &str, value: String, _width: u16) -> Line<'static> {
     let label_width = label.chars().count().clamp(6, 10);
     Line::from(vec![
-        Span::styled(format!("{label:<label_width$}"), muted_style()),
+        Span::styled(format!("{label:<label_width$} "), muted_style()),
         Span::styled(value, text_style()),
     ])
 }
 
 fn kv_lines(label: &str, value: String, width: u16) -> Vec<Line<'static>> {
     let label_width = label.chars().count().clamp(6, 10);
-    let value_width = width.saturating_sub(label_width as u16 + 3).max(12) as usize;
+    let value_width = width.saturating_sub(label_width as u16 + 4).max(12) as usize;
     let wrapped = wrap_value_lines(&value, value_width, 2);
-    let indent = " ".repeat(label_width);
+    let indent = " ".repeat(label_width + 1);
 
     wrapped
         .into_iter()
@@ -2157,7 +2202,7 @@ fn kv_lines(label: &str, value: String, width: u16) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled(
                     if index == 0 {
-                        format!("{label:<label_width$}")
+                        format!("{label:<label_width$} ")
                     } else {
                         indent.clone()
                     },
@@ -2586,6 +2631,87 @@ impl UiSnapshot {
             watcher_online,
             paths: paths.clone(),
         })
+    }
+}
+
+fn preview_fixture_paths() -> AppPaths {
+    let nonce = chrono::Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string();
+    let root = std::env::temp_dir().join(format!("protoswitch-ui-preview-{nonce}"));
+    let config_dir = root.join("config").join(crate::APP_NAME);
+    let local_dir = root.join("data").join(crate::APP_NAME);
+    let logs_dir = local_dir.join("logs");
+
+    AppPaths {
+        config_dir: config_dir.clone(),
+        local_dir: local_dir.clone(),
+        logs_dir: logs_dir.clone(),
+        config_file: config_dir.join("config.toml"),
+        state_file: local_dir.join("state.json"),
+        log_file: logs_dir.join("watch.log"),
+    }
+}
+
+fn preview_sample_snapshot(paths: AppPaths) -> UiSnapshot {
+    let mut config = AppConfig::default();
+    config.telegram.backend_mode = TelegramBackendMode::Managed;
+    let current = ProxyRecord::new(
+        TelegramProxy::mtproto(
+            "ovh.pl.1.mtproto.ru",
+            443,
+            "ee211122223333444455556666777788",
+        ),
+        "mtproto.ru",
+    );
+    let pending = ProxyRecord::new(
+        TelegramProxy::socks5("185.3.200.185", 2053, None, None),
+        "proxifly",
+    );
+    let now = chrono::Utc::now();
+    let state = AppState {
+        current_proxy: Some(current),
+        pending_proxy: Some(pending),
+        current_proxy_status: "proxy сохранён, ждёт перезапуска Telegram".to_string(),
+        source_status: "источник временно пуст, используем сохранённый managed proxy".to_string(),
+        backend_status: "managed enabled / selected proxy".to_string(),
+        backend_route:
+            "pending until restart / C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
+                .to_string(),
+        backend_restart_required: true,
+        last_fetch_at: Some(now),
+        last_apply_at: Some(now),
+        watcher: WatcherSnapshot {
+            mode: WatcherMode::WaitingForTelegram,
+            failure_streak: 2,
+            telegram_running: true,
+            last_check_at: Some(now),
+            next_check_at: Some(now),
+        },
+        ..AppState::default()
+    };
+
+    UiSnapshot {
+        config,
+        state,
+        autostart: platform::AutostartStatus {
+            installed: true,
+            method: Some(AutostartMethod::StartupFolder),
+            target: Some("ProtoSwitch".to_string()),
+        },
+        watcher_online: true,
+        paths,
+    }
+}
+
+fn parse_preview_section(section: &str) -> anyhow::Result<ConsoleSection> {
+    match section.to_ascii_lowercase().as_str() {
+        "dashboard" | "overview" => Ok(ConsoleSection::Dashboard),
+        "actions" => Ok(ConsoleSection::Actions),
+        "providers" => Ok(ConsoleSection::Providers),
+        "history" => Ok(ConsoleSection::History),
+        other => Err(anyhow::anyhow!("Неизвестный section preview: {other}")),
     }
 }
 
