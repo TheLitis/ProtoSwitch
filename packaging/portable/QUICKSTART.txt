@@ -1,0 +1,25 @@
+ProtoSwitch portable
+
+Быстрый старт
+
+1. Запустите бинарь ProtoSwitch из этой папки.
+   Windows: protoswitch.exe
+   Linux/macOS: ./protoswitch
+2. Создайте или обновите конфиг:
+   protoswitch init --non-interactive --no-autostart
+3. Проверьте состояние:
+   protoswitch status --plain
+   protoswitch doctor
+4. Для ручной смены proxy:
+   protoswitch switch
+5. Для фоновой работы:
+   protoswitch watch --headless
+6. Для автозапуска используйте:
+   protoswitch autostart install
+
+Что входит в архив
+
+- ProtoSwitch
+- README.md
+- CHANGELOG.md
+- QUICKSTART.txt

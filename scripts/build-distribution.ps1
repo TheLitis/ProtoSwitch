@@ -23,10 +23,9 @@ $versionInfoVersion = if ($version -match '^(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') {
 }
 $releaseDir = Join-Path $repoRoot 'target\release'
 $distRoot = Join-Path $repoRoot "dist\$version"
-$portableStageRoot = Join-Path $distRoot 'portable-stage'
-$portableDir = Join-Path $portableStageRoot 'ProtoSwitch'
 $portableZip = Join-Path $distRoot 'protoswitch-portable-win-x64.zip'
 $quickstart = Join-Path $repoRoot 'packaging\windows\QUICKSTART.txt'
+$portablePackager = Join-Path $repoRoot 'scripts\package-portable.py'
 $installerScript = Join-Path $repoRoot 'packaging\windows\ProtoSwitch.iss'
 
 function Resolve-Iscc {
@@ -60,16 +59,17 @@ if (Test-Path $distRoot) {
     Remove-Item -Recurse -Force $distRoot
 }
 
-New-Item -ItemType Directory -Path $portableDir -Force | Out-Null
-
-Copy-Item (Join-Path $releaseDir 'protoswitch.exe') $portableDir
-Copy-Item (Join-Path $repoRoot 'README.md') $portableDir
-Copy-Item (Join-Path $repoRoot 'CHANGELOG.md') $portableDir
-Copy-Item $quickstart $portableDir
-
 Write-Host 'Creating portable zip...'
-Compress-Archive -Path (Join-Path $portableStageRoot 'ProtoSwitch') -DestinationPath $portableZip -Force
-Remove-Item -Recurse -Force $portableStageRoot
+python $portablePackager `
+    --repo-root $repoRoot `
+    --version $version `
+    --platform win `
+    --arch x64 `
+    --binary (Join-Path $releaseDir 'protoswitch.exe') `
+    --format zip
+if ($LASTEXITCODE -ne 0) {
+    throw "portable packaging failed with exit code $LASTEXITCODE"
+}
 
 if (-not $SkipInstaller) {
     $iscc = Resolve-Iscc
