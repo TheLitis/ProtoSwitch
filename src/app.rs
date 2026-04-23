@@ -836,6 +836,11 @@ pub(crate) fn background_summary_text(state: &AppState) -> String {
         };
     }
 
+    if matches!(state.watcher.mode, WatcherMode::Idle) {
+        return "Watcher сейчас остановлен, так что ProtoSwitch вообще не вмешивается в работу Telegram."
+            .to_string();
+    }
+
     if state.watcher.telegram_running {
         "Watcher не поднимает Telegram поверх окон и не просит подтверждений сам по себе."
             .to_string()
@@ -1895,6 +1900,7 @@ mod tests {
         };
 
         assert!(overall_summary_text(&state).contains("Watcher остановлен"));
+        assert!(background_summary_text(&state).contains("вообще не вмешивается"));
         assert!(next_step_text(&state).contains("Запустите watcher"));
     }
 }
