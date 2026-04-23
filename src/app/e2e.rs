@@ -17,8 +17,8 @@ use crate::model::{
     ProviderSource, ProviderSourceKind, TelegramBackendMode, TelegramProxy, WatcherSnapshot,
 };
 use crate::tdesktop::{
-    DesktopProxy, DesktopProxyMode, DesktopProxySettings, DesktopProxyType, read_test_proxy_settings,
-    seed_test_proxy_settings,
+    DesktopProxy, DesktopProxyMode, DesktopProxySettings, DesktopProxyType,
+    read_test_proxy_settings, seed_test_proxy_settings,
 };
 
 struct FixtureServer {
@@ -189,6 +189,10 @@ fn mtproto_proxy(port: u16, secret: &str) -> TelegramProxy {
     TelegramProxy::mtproto("127.0.0.1", port, secret)
 }
 
+fn mtproto_proxy_at(server: &str, port: u16, secret: &str) -> TelegramProxy {
+    TelegramProxy::mtproto(server, port, secret)
+}
+
 fn unused_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -235,7 +239,8 @@ fn watcher_e2e_keeps_healthy_proxy_without_touching_settings() {
     let harness = WatcherHarness::new(HashMap::new());
     let live_proxy = LiveProxyListener::new();
     let config = harness.config_with_sources(Vec::new());
-    let current_record = ProxyRecord::new(mtproto_proxy(live_proxy.port, "healthy-secret"), "current");
+    let current_record =
+        ProxyRecord::new(mtproto_proxy(live_proxy.port, "healthy-secret"), "current");
     let state = AppState {
         current_proxy: Some(current_record.clone()),
         watcher: WatcherSnapshot {
@@ -258,7 +263,10 @@ fn watcher_e2e_keeps_healthy_proxy_without_touching_settings() {
     assert_eq!(message, "Proxy остаётся рабочим.");
     assert!(matches!(after_state.watcher.mode, WatcherMode::Watching));
     assert_eq!(
-        after_state.current_proxy.as_ref().map(|record| &record.proxy),
+        after_state
+            .current_proxy
+            .as_ref()
+            .map(|record| &record.proxy),
         Some(&current_record.proxy)
     );
     assert!(after_state.pending_proxy.is_none());
@@ -307,14 +315,24 @@ fn watcher_e2e_saves_pending_proxy_when_telegram_is_closed() {
     ));
     assert!(!after_state.backend_restart_required);
     assert_eq!(
-        after_state.pending_proxy.as_ref().map(|record| &record.proxy),
+        after_state
+            .pending_proxy
+            .as_ref()
+            .map(|record| &record.proxy),
         Some(&candidate)
     );
     assert_eq!(
-        after_state.current_proxy.as_ref().map(|record| &record.proxy),
+        after_state
+            .current_proxy
+            .as_ref()
+            .map(|record| &record.proxy),
         Some(&current_record.proxy)
     );
-    assert!(after_state.source_status.contains("replacement proxy сохранён"));
+    assert!(
+        after_state
+            .source_status
+            .contains("replacement proxy сохранён")
+    );
     assert_eq!(before, after_settings);
 }
 
@@ -323,7 +341,7 @@ fn watcher_e2e_writes_managed_settings_when_telegram_is_open() {
     let _serial = e2e_lock();
     let live_candidate = LiveProxyListener::new();
     let candidate = mtproto_proxy(live_candidate.port, "replacement-secret");
-    let old_managed = mtproto_proxy(unused_port(), "old-secret");
+    let old_managed = mtproto_proxy_at("127.0.0.2", 443, "old-secret");
     let candidate_link = candidate.deep_link();
     let harness = WatcherHarness::new(HashMap::from([(
         "/candidate.txt".to_string(),
@@ -353,7 +371,10 @@ fn watcher_e2e_writes_managed_settings_when_telegram_is_open() {
     let provider = MtProtoProvider::new(config.provider.clone()).unwrap();
     let _guard = telegram::override_is_running(true);
     assert_ne!(old_managed, candidate);
-    assert!(telegram::check_proxy(&candidate, config.watcher.connect_timeout_secs));
+    assert!(telegram::check_proxy(
+        &candidate,
+        config.watcher.connect_timeout_secs
+    ));
     watch_cycle(&harness.paths, &config, &provider, true).unwrap();
 
     let after_state = AppState::load(&harness.paths).unwrap();
@@ -361,20 +382,27 @@ fn watcher_e2e_writes_managed_settings_when_telegram_is_open() {
     let doctor = doctor_snapshot_v2(&harness.paths).unwrap();
     let status = status_json(&harness.paths);
 
-    assert!(matches!(
-        after_state.watcher.mode,
-        WatcherMode::WaitingForTelegram
-    ));
-    assert!(after_state.backend_restart_required);
+    assert!(matches!(after_state.watcher.mode, WatcherMode::Watching));
+    assert!(!after_state.backend_restart_required);
     assert!(after_state.pending_proxy.is_none());
     assert_eq!(
-        after_state.current_proxy.as_ref().map(|record| &record.proxy),
+        after_state
+            .current_proxy
+            .as_ref()
+            .map(|record| &record.proxy),
         Some(&candidate)
     );
-    assert!(after_state.current_proxy_status.contains("settingss"));
+    assert!(
+        after_state
+            .current_proxy_status
+            .contains("Telegram settings")
+    );
     assert!(after_state.backend_route.contains("settingss"));
     assert_eq!(
-        managed_settings.selected.as_ref().map(|proxy| proxy.host.as_str()),
+        managed_settings
+            .selected
+            .as_ref()
+            .map(|proxy| proxy.host.as_str()),
         Some("127.0.0.1")
     );
     assert!(managed_settings.list.iter().any(|proxy| {
@@ -388,12 +416,17 @@ fn watcher_e2e_writes_managed_settings_when_telegram_is_open() {
     assert!(!managed_settings.list.iter().any(|proxy| {
         proxy.kind == DesktopProxyType::Mtproto && proxy.password == "old-secret"
     }));
-    assert!(doctor.backend_restart_required);
+    assert!(managed_settings.proxy_rotation_enabled);
+    assert!(!managed_settings.proxy_rotation_preferred_indices.is_empty());
+    assert!(!doctor.backend_restart_required);
     assert!(doctor.backend_route.contains("settingss"));
-    assert_eq!(status["state"]["backend_restart_required"], Value::Bool(true));
+    assert_eq!(
+        status["state"]["backend_restart_required"],
+        Value::Bool(false)
+    );
     assert_eq!(
         status["state"]["watcher"]["mode"],
-        Value::String("waiting_for_telegram".to_string())
+        Value::String("watching".to_string())
     );
     assert!(status["state"]["pending_proxy"].is_null());
 }
@@ -405,21 +438,18 @@ fn watcher_e2e_skips_dead_candidate_and_uses_next_live_source() {
     let live_candidate = LiveProxyListener::new();
     let live_proxy = mtproto_proxy(live_candidate.port, "live-candidate");
     let harness = WatcherHarness::new(HashMap::from([
-        (
-            "/dead.txt".to_string(),
-            dead_candidate.deep_link(),
-        ),
-        (
-            "/live.txt".to_string(),
-            live_proxy.deep_link(),
-        ),
+        ("/dead.txt".to_string(), dead_candidate.deep_link()),
+        ("/live.txt".to_string(), live_proxy.deep_link()),
     ]));
     let config = harness.config_with_sources(vec![
         link_list_source("fixture-dead", harness.server.url("/dead.txt")),
         link_list_source("fixture-live", harness.server.url("/live.txt")),
     ]);
     let state = AppState {
-        current_proxy: Some(ProxyRecord::new(mtproto_proxy(unused_port(), "current-dead"), "current")),
+        current_proxy: Some(ProxyRecord::new(
+            mtproto_proxy(unused_port(), "current-dead"),
+            "current",
+        )),
         watcher: WatcherSnapshot {
             mode: WatcherMode::Watching,
             ..WatcherSnapshot::default()
@@ -436,7 +466,10 @@ fn watcher_e2e_skips_dead_candidate_and_uses_next_live_source() {
     let after_state = AppState::load(&harness.paths).unwrap();
 
     assert_eq!(
-        after_state.pending_proxy.as_ref().map(|record| &record.proxy),
+        after_state
+            .pending_proxy
+            .as_ref()
+            .map(|record| &record.proxy),
         Some(&live_proxy)
     );
     let log_output = fs::read_to_string(&harness.paths.log_file).unwrap();
@@ -446,16 +479,16 @@ fn watcher_e2e_skips_dead_candidate_and_uses_next_live_source() {
 #[test]
 fn watcher_e2e_marks_empty_sources_without_touching_settings() {
     let _serial = e2e_lock();
-    let harness = WatcherHarness::new(HashMap::from([(
-        "/empty.txt".to_string(),
-        String::new(),
-    )]));
+    let harness = WatcherHarness::new(HashMap::from([("/empty.txt".to_string(), String::new())]));
     let config = harness.config_with_sources(vec![link_list_source(
         "fixture-empty",
         harness.server.url("/empty.txt"),
     )]);
     let state = AppState {
-        current_proxy: Some(ProxyRecord::new(mtproto_proxy(unused_port(), "dead-secret"), "current")),
+        current_proxy: Some(ProxyRecord::new(
+            mtproto_proxy(unused_port(), "dead-secret"),
+            "current",
+        )),
         watcher: WatcherSnapshot {
             mode: WatcherMode::Watching,
             ..WatcherSnapshot::default()

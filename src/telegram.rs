@@ -7,9 +7,9 @@ use std::sync::{Mutex, OnceLock};
 use std::thread::sleep;
 use std::time::Duration;
 
-use anyhow::anyhow;
 #[cfg(windows)]
 use anyhow::Context;
+use anyhow::anyhow;
 use sysinfo::{ProcessesToUpdate, System};
 
 use crate::model::{MtProtoProxy, ProxyKind, TelegramBackendMode, TelegramConfig};
@@ -41,6 +41,7 @@ pub struct ManagedSettingsStatus {
     pub selected_label: String,
     pub mode_label: String,
     pub proxy_count: usize,
+    pub rotation_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +193,7 @@ pub fn managed_settings_status(config: &TelegramConfig) -> anyhow::Result<Manage
         selected_label: settings.selected_label(),
         mode_label: managed_mode_label(settings.mode).to_string(),
         proxy_count: settings.list.len(),
+        rotation_enabled: settings.proxy_rotation_enabled,
     })
 }
 
@@ -215,6 +217,7 @@ pub fn apply_managed_proxy(
         selected_label: settings.selected_label(),
         mode_label: managed_mode_label(settings.mode).to_string(),
         proxy_count: settings.list.len(),
+        rotation_enabled: settings.proxy_rotation_enabled,
     };
 
     if matches!(config.backend_mode, TelegramBackendMode::Managed) || !is_running().unwrap_or(false)

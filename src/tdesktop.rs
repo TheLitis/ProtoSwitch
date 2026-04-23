@@ -156,7 +156,28 @@ impl DesktopProxySettings {
         }
         self.selected = Some(candidate);
         self.mode = DesktopProxyMode::Enabled;
-        self.proxy_rotation_preferred_indices.clear();
+        self.refresh_managed_rotation(proxy, owned);
+    }
+
+    fn refresh_managed_rotation(&mut self, proxy: &TelegramProxy, owned: &[TelegramProxy]) {
+        let mut managed = owned.to_vec();
+        if !managed.iter().any(|candidate| candidate == proxy) {
+            managed.push(proxy.clone());
+        }
+
+        self.proxy_rotation_preferred_indices = self
+            .list
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| {
+                managed
+                    .iter()
+                    .any(|managed| desktop_proxy_matches_managed(candidate, managed))
+            })
+            .map(|(index, _)| index as i32)
+            .collect();
+        self.proxy_rotation_enabled = !self.proxy_rotation_preferred_indices.is_empty();
+        self.proxy_rotation_timeout = self.proxy_rotation_timeout.max(30);
     }
 
     pub fn cleanup_owned(&mut self, owned: &[TelegramProxy]) -> usize {
@@ -371,7 +392,8 @@ impl TelegramDesktopSettings {
 pub fn resolve_telegram_data_dir(config: &TelegramConfig) -> anyhow::Result<PathBuf> {
     if let Some(override_path) = config.data_dir.as_deref() {
         let candidate = PathBuf::from(override_path);
-        if candidate.join(SETTINGS_FILE_NAME).exists() || candidate.join(SETTINGS_FILE_STEM).exists()
+        if candidate.join(SETTINGS_FILE_NAME).exists()
+            || candidate.join(SETTINGS_FILE_STEM).exists()
         {
             return Ok(candidate);
         }
@@ -505,8 +527,7 @@ fn fresh_test_settings_file() -> TelegramDesktopSettings {
                 id: DBI_APPLICATION_SETTINGS,
                 payload: {
                     let proxy_blob = DesktopProxySettings::default().to_proxy_blob();
-                    let application_settings =
-                        build_test_application_settings_prefix(&proxy_blob);
+                    let application_settings = build_test_application_settings_prefix(&proxy_blob);
                     let mut writer = QtWriter::new();
                     writer.write_bytearray(&application_settings);
                     writer.finish()
@@ -757,12 +778,30 @@ fn parse_legacy_connection_type_old(bytes: &[u8]) -> anyhow::Result<DesktopProxy
     } else {
         None
     };
+    let proxy_rotation_enabled = reader
+        .read_i32_opt()?
+        .map(|value| value == 1)
+        .unwrap_or(false);
+    let proxy_rotation_timeout = reader.read_i32_opt()?.unwrap_or(60);
+    let preferred_count = reader.read_i32_opt()?.unwrap_or(0);
+    if preferred_count < 0 {
+        return Err(anyhow!(
+            "Telegram legacy proxy override вернул отрицательный preferred count"
+        ));
+    }
+    let mut proxy_rotation_preferred_indices = Vec::with_capacity(preferred_count as usize);
+    for _ in 0..preferred_count {
+        proxy_rotation_preferred_indices.push(reader.read_i32()?);
+    }
 
     Ok(DesktopProxySettings {
         use_proxy_for_calls,
         mode: settings,
         selected,
         list,
+        proxy_rotation_enabled,
+        proxy_rotation_timeout,
+        proxy_rotation_preferred_indices,
         ..DesktopProxySettings::default()
     })
 }
@@ -818,6 +857,16 @@ fn serialize_legacy_connection_type_old(settings: &DesktopProxySettings) -> Vec<
     for proxy in &settings.list {
         write_legacy_proxy(&mut writer, proxy);
     }
+    writer.write_i32(if settings.proxy_rotation_enabled {
+        1
+    } else {
+        0
+    });
+    writer.write_i32(settings.proxy_rotation_timeout.max(1));
+    writer.write_i32(settings.proxy_rotation_preferred_indices.len() as i32);
+    for index in &settings.proxy_rotation_preferred_indices {
+        writer.write_i32(*index);
+    }
     writer.finish()
 }
 
@@ -835,6 +884,19 @@ fn skip_legacy_connection_type_old(reader: &mut QtReader<'_>) -> anyhow::Result<
         }
         for _ in 0..count {
             skip_legacy_proxy(reader)?;
+        }
+        if let Some(enabled) = reader.read_i32_opt()? {
+            let _ = enabled;
+            let _ = reader.read_i32_opt()?;
+            let preferred_count = reader.read_i32_opt()?.unwrap_or(0);
+            if preferred_count < 0 {
+                return Err(anyhow!(
+                    "Telegram legacy proxy override вернул отрицательный preferred count"
+                ));
+            }
+            for _ in 0..preferred_count {
+                reader.read_i32()?;
+            }
         }
         Ok(())
     } else {

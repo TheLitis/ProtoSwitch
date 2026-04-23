@@ -926,9 +926,14 @@ pub(crate) fn backend_status_text(
 
     managed
         .map(|status| {
+            let rotation = if status.rotation_enabled {
+                " / rotation"
+            } else {
+                ""
+            };
             format!(
-                "managed backend / {} / {}",
-                status.mode_label, status.selected_label
+                "managed backend / {}{} / {}",
+                status.mode_label, rotation, status.selected_label
             )
         })
         .unwrap_or_else(|| "нет данных".to_string())
@@ -1050,7 +1055,7 @@ pub(crate) fn load_status_snapshot(
     if let Ok(managed) = telegram::managed_settings_status(&config.telegram) {
         if state.backend_status.trim().is_empty() {
             state.set_backend_status(format!(
-                "тихий backend / {} / {}",
+                "managed backend / {} / {}",
                 managed.mode_label, managed.selected_label
             ));
         }
@@ -1122,7 +1127,7 @@ fn store_apply_failure(
     state.last_error = Some(failure.error_message);
     state.set_current_proxy_status(failure.current_status);
     state.set_source_status(failure.source_status);
-    state.set_backend_status("тихий backend завершился ошибкой");
+    state.set_backend_status("managed backend завершился ошибкой");
     state.push_recent(record.clone(), config.watcher.history_size);
     state.save(&paths.state_file)?;
     paths.append_log(failure.log_message)?;
@@ -1165,23 +1170,25 @@ fn apply_proxy_record(
                     state,
                     &record,
                     ApplyFailureState {
-                        current_status: format!("Тихий backend не смог записать proxy: {details}"),
+                        current_status: format!(
+                            "Managed backend не смог записать proxy: {details}"
+                        ),
                         source_status: format!(
-                            "Источник дал кандидата {}, но тихий backend завершился ошибкой: {details}",
+                            "Источник дал кандидата {}, но managed backend завершился ошибкой: {details}",
                             record.proxy.short_label()
                         ),
                         error_message: format!(
-                            "Тихий backend не смог записать proxy: {}",
+                            "Managed backend не смог записать proxy: {}",
                             record.proxy.short_label()
                         ),
                         log_message: format!(
-                            "тихий backend отклонил proxy {}: {details}",
+                            "managed backend отклонил proxy {}: {details}",
                             record.proxy.short_label()
                         ),
                     },
                 )?;
                 return Err(anyhow::anyhow!(
-                    "Тихий backend не смог записать proxy: {}",
+                    "Managed backend не смог записать proxy: {} ({details})",
                     record.proxy.short_label()
                 ));
             }
@@ -1201,7 +1208,7 @@ fn apply_proxy_record(
             ));
         } else {
             state.set_backend_status(format!(
-                "тихий backend / {} / {}",
+                "managed backend / {} / {}",
                 managed.settings_status.mode_label, managed.settings_status.selected_label
             ));
             state.set_backend_route(format!("settingss -> {}", managed.settings_path.display()));
@@ -1212,14 +1219,14 @@ fn apply_proxy_record(
             state.pending_proxy = None;
             state.last_fetch_at.get_or_insert(record.captured_at);
             state.last_apply_at = Some(Utc::now());
-            state.backend_restart_required = state.watcher.telegram_running;
-            state.watcher.mode = WatcherMode::WaitingForTelegram;
+            state.backend_restart_required = false;
+            state.watcher.mode = WatcherMode::Watching;
             state.watcher.failure_streak = 0;
             state.last_error = None;
             state.set_current_proxy_status(if managed.fallback_error.is_some() {
                 "proxy сохранён в settingss, ручной fallback недоступен"
             } else if state.watcher.telegram_running {
-                "proxy сохранён в settingss, нужен перезапуск Telegram"
+                "proxy записан в Telegram settings"
             } else {
                 "proxy сохранён в Telegram settings"
             });
@@ -1237,12 +1244,12 @@ fn apply_proxy_record(
                     if managed.fallback_error.is_some() {
                         "сохранён в settingss, ручной fallback недоступен"
                     } else {
-                        "сохранён в settingss, без live-apply"
+                        "записан в Telegram settings"
                     }
                 )
             } else {
                 format!(
-                    "{success_prefix}: {} (применится при следующем запуске Telegram)",
+                    "{success_prefix}: {} (записан в Telegram settings)",
                     record.proxy.short_label()
                 )
             });
@@ -1405,7 +1412,12 @@ fn apply_candidate_with_retries(
     let mut last_error = None;
 
     for _ in 0..attempts {
-        let record = fetch_validated_candidate(paths, config, provider, &rejected)?;
+        let record = match fetch_validated_candidate(paths, config, provider, &rejected) {
+            Ok(record) => record,
+            Err(error) => {
+                return Err(last_error.unwrap_or(error));
+            }
+        };
         rejected.push(record.proxy.clone());
         state.last_fetch_at = Some(record.captured_at);
         match apply_proxy_record(
@@ -1509,7 +1521,13 @@ pub(crate) fn doctor_snapshot_v2(paths: &AppPaths) -> anyhow::Result<DoctorSnaps
         backend_status: backend_status_text(&state, managed.as_ref()),
         backend_route: backend_route_text(&state, managed.as_ref()),
         backend_restart_required: state.backend_restart_required,
-        managed_proxy_mode: managed.as_ref().map(|status| status.mode_label.clone()),
+        managed_proxy_mode: managed.as_ref().map(|status| {
+            if status.rotation_enabled {
+                format!("{} / rotation", status.mode_label)
+            } else {
+                status.mode_label.clone()
+            }
+        }),
         managed_selected_proxy: managed.as_ref().map(|status| status.selected_label.clone()),
         managed_proxy_count: managed.as_ref().map(|status| status.proxy_count),
         autostart,
