@@ -1,87 +1,116 @@
 # ProtoSwitch
 
-**ProtoSwitch v0.1.0-beta.11** — Windows CLI/TUI для Telegram Desktop, который следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и помогает переключиться без ручной возни с адресами, портами и `secret`.
+**ProtoSwitch v0.2.0-beta.1** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и тихо пишет новый managed proxy в настройки Telegram без popup и без focus stealing.
 
-## Что Уже Есть
+## Что Есть Сейчас
 
-- terminal-first интерфейс с отдельными разделами `Обзор`, `Команды`, `Источники`, `История`;
 - watcher для фоновой проверки и ротации proxy;
-- автоматическая работа с `tg://proxy` и `tg://socks`;
-- provider pool из нескольких бесплатных источников;
-- автозапуск через `Scheduled Task` с fallback в `Startup folder`;
-- installer и portable-сборка для Windows x64.
+- adaptive TUI с режимами `Обзор`, `Команды`, `Источники`, `История`;
+- managed backend для `tdata/settingss`, чтобы не засорять Telegram случайными нерабочими адресами;
+- manual fallback для явного `switch` и `repair`, если нужен live-сценарий;
+- structured UTF-8 логи без старого `String::from_utf8_lossy`-хаоса;
+- Windows installer + portable-артефакты для Windows, Linux и macOS;
+- автозапуск через `Scheduled Task` / `Startup folder` на Windows, XDG autostart на Linux и LaunchAgent на macOS.
 
-## Дистрибутивы
+## Артефакты
 
-| Файл | Для чего |
+| Файл | Назначение |
 | --- | --- |
-| `ProtoSwitch-Setup-x64.exe` | обычная установка с ярлыками, uninstall entry и первичной инициализацией |
-| `protoswitch-portable-win-x64.zip` | запуск без installer |
+| `ProtoSwitch-Setup-x64.exe` | обычная установка для Windows x64 |
+| `protoswitch-portable-win-x64.zip` | portable для Windows x64 |
+| `protoswitch-portable-linux-x64.tar.gz` | portable для Linux x64 |
+| `protoswitch-portable-linux-arm64.tar.gz` | portable для Linux arm64 |
+| `protoswitch-portable-macos-x64.tar.gz` | portable для macOS x64 |
+| `protoswitch-portable-macos-arm64.tar.gz` | portable для macOS arm64 |
 
-## Быстрый Старт
+Windows installer остаётся только для Windows. Linux и macOS в этой очереди идут как portable-first beta.
 
-1. Установите `ProtoSwitch-Setup-x64.exe` или распакуйте portable-архив.
-2. Запустите `protoswitch.exe`.
-3. На первом старте проверьте параметры и сохраните конфиг.
-4. При необходимости включите автозапуск watcher.
-5. Откройте Telegram Desktop и проверьте состояние в разделе `Обзор`.
-
-Если приложение уже установлено через installer, в меню `Пуск` есть:
-
-- `ProtoSwitch`
-- `Починить ProtoSwitch`
-- `Удалить ProtoSwitch`
-
-## Как Выглядит Управление
-
-Запуск без аргументов открывает консоль управления.
-
-- `Обзор` — текущее состояние proxy, watcher и Telegram.
-- `Команды` — `switch`, `doctor`, запуск/остановка watcher, refresh, stop-all.
-- `Источники` — активные provider-ленты и fallback-политика.
-- `История` — последние найденные и применённые proxy.
-
-Полезные команды CLI:
-
-| Команда | Что делает |
-| --- | --- |
-| `protoswitch init` | создаёт или обновляет конфиг |
-| `protoswitch status` | показывает снимок состояния |
-| `protoswitch watch` | запускает watcher |
-| `protoswitch switch` | сразу ищет и применяет новый proxy |
-| `protoswitch doctor` | проводит диагностику |
-| `protoswitch repair` | чинит локальную установку |
-| `protoswitch shutdown` | останавливает фоновые процессы ProtoSwitch |
-| `protoswitch autostart install` | включает автозапуск |
-| `protoswitch autostart remove` | выключает автозапуск |
-
-## Как Это Работает
-
-1. ProtoSwitch проверяет текущий управляемый proxy.
-2. Если он жив, состояние просто обновляется.
-3. Если он деградировал, watcher идёт по provider pool.
-4. Кандидат локально валидируется до применения.
-5. Затем ProtoSwitch отдаёт в Windows `tg://proxy` или `tg://socks`.
-6. Если Telegram доступен в текущей интерактивной сессии, приложение старается подтвердить переключение автоматически.
+## Как Работает
 
 ```mermaid
 flowchart TD
-    A["watch / switch"] --> B["проверка proxy"]
-    B -->|ok| C["обновить state"]
-    B -->|fail| D["взять кандидата"]
-    D --> E["локальная проверка"]
+    A["watch / switch"] --> B["Проверить текущий proxy"]
+    B -->|ok| C["Обновить state"]
+    B -->|fail| D["Взять кандидата"]
+    D --> E["Локально проверить"]
     E -->|bad| D
     E -->|good| F{"Telegram открыт?"}
-    F -->|нет| G["сохранить pending"]
-    F -->|да| H["применить tg://"]
-    H --> I["проверить статус"]
-    G --> J["ждать ручной apply"]
-    I --> K["записать результат"]
+    F -->|нет| G["Тихо записать managed proxy"]
+    F -->|да| H["Тихо записать managed proxy<br/>и пометить waiting_for_restart"]
+    G --> I["Proxy применится при следующем запуске Telegram"]
+    H --> I
 ```
+
+Фоновый watcher не должен поднимать Telegram поверх других окон. Если клиент уже открыт, ProtoSwitch сохраняет новый proxy в managed subset и честно показывает, что он ждёт следующего запуска Telegram.
+
+## Быстрый Старт
+
+### Windows
+
+1. Установите `ProtoSwitch-Setup-x64.exe` или распакуйте `protoswitch-portable-win-x64.zip`.
+2. Запустите `protoswitch.exe` без аргументов.
+3. Проверьте состояние:
+   `protoswitch status --plain`
+   `protoswitch doctor`
+4. При необходимости включите автозапуск:
+   `protoswitch autostart install`
+5. Для ручной смены proxy:
+   `protoswitch switch`
+
+### Linux / macOS
+
+1. Распакуйте portable-архив под свою архитектуру.
+2. Запустите:
+   `./protoswitch init --non-interactive --no-autostart`
+3. Проверьте состояние:
+   `./protoswitch status --plain`
+   `./protoswitch doctor`
+4. Для фоновой работы:
+   `./protoswitch watch --headless`
+
+## Основные Команды
+
+| Команда | Что делает |
+| --- | --- |
+| `protoswitch init` | создаёт или обновляет `config.toml` |
+| `protoswitch status` | показывает текущее состояние proxy, backend и автозапуска |
+| `protoswitch watch` | запускает watcher |
+| `protoswitch switch` | сразу ищет и применяет новый proxy |
+| `protoswitch cleanup` | чистит dead ProtoSwitch-owned proxy из managed subset |
+| `protoswitch doctor` | проводит диагностику окружения |
+| `protoswitch repair` | восстанавливает локальную установку |
+| `protoswitch shutdown` | полностью останавливает процессы ProtoSwitch |
+| `protoswitch autostart install` | включает автозапуск |
+| `protoswitch autostart remove` | выключает автозапуск |
+
+## Конфиг И Данные
+
+В `config.toml` закреплён блок:
+
+```toml
+[telegram]
+client = "desktop"
+backend_mode = "hybrid"
+data_dir = ""
+```
+
+`backend_mode`:
+
+- `managed` — только тихая запись в `settingss`;
+- `hybrid` — managed path по умолчанию, live fallback только для явных ручных действий;
+- `manual` — без фонового live-apply watcher всё равно остаётся silent-only.
+
+Каталоги данных:
+
+| ОС | Конфиг | State / logs | Автозапуск |
+| --- | --- | --- | --- |
+| Windows | `%APPDATA%\ProtoSwitch\config.toml` | `%LOCALAPPDATA%\ProtoSwitch\state.json`, `%LOCALAPPDATA%\ProtoSwitch\logs\watch.log` | `Scheduled Task` или `Startup folder` |
+| Linux | XDG config dir | XDG data dir | `~/.config/autostart/protoswitch.desktop` |
+| macOS | `~/Library/Application Support/ProtoSwitch` | `~/Library/Application Support/ProtoSwitch` | `~/Library/LaunchAgents/com.thelitis.protoswitch.plist` |
 
 ## Источники Proxy
 
-По умолчанию в пул входят:
+По умолчанию ProtoSwitch использует пул из нескольких бесплатных лент:
 
 - `mtproto.ru`
 - `SoliSpirit/mtproto`
@@ -90,34 +119,11 @@ flowchart TD
 - `proxifly/free-proxy-list`
 - `hookzof/socks5_list`
 
-ProtoSwitch не считает любой найденный адрес рабочим автоматически: перед применением кандидат проходит локальную проверку, а затем подтверждается в Telegram, если это возможно в текущей сессии.
+Новый кандидат сначала проходит локальную проверку, и только потом попадает в managed subset Telegram.
 
-## Автозапуск
+## Ограничения Beta
 
-ProtoSwitch пытается создать per-user `Scheduled Task`. Если Windows не даёт этого сделать, используется fallback в `Startup folder`.
-
-В интерфейсе и в `doctor` видно, какой именно вариант сейчас активен:
-
-- `scheduled_task`
-- `startup_folder`
-
-## Удаление
-
-Если приложение ставилось через installer:
-
-1. используйте `Удалить ProtoSwitch` или стандартный uninstall Windows;
-2. installer сам снимает автозапуск;
-3. пользовательские данные в `%APPDATA%\ProtoSwitch` и `%LOCALAPPDATA%\ProtoSwitch` по умолчанию не удаляются.
-
-Если используется portable-версия:
-
-1. выполните `protoswitch autostart remove`, если включали автозапуск;
-2. выполните `protoswitch shutdown`;
-3. удалите папку с portable-файлами.
-
-## Ограничения Beta.11
-
-- поддерживается только `Windows 10/11 x64`;
-- приложение рассчитано только на `Telegram Desktop`;
-- бесплатные proxy по природе нестабильны;
-- авто-подтверждение Telegram работает только в той же интерактивной Windows-сессии, где реально открыт Telegram.
+- поддерживается только `Telegram Desktop`;
+- Linux/macOS сейчас portable-first и всё ещё считаются beta-grade веткой;
+- фоновый watcher не делает true live-switch для уже открытого Telegram, а использует честную схему `silent save + next launch`;
+- бесплатные proxy по природе нестабильны, поэтому это всё ещё beta, а не stable.
