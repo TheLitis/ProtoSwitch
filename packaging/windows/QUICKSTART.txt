@@ -1,17 +1,18 @@
-ProtoSwitch v0.1.0-beta.11
+ProtoSwitch v0.2.0-beta.1
 
 Быстрый старт
 
-1. Если это installer-версия, первичная инициализация уже выполнена.
-2. Если это portable-версия, запустите:
-   protoswitch.exe init --non-interactive --no-autostart
+1. Installer уже выполняет первичную инициализацию.
+2. Запустите ProtoSwitch из меню Пуск или через protoswitch.exe.
 3. Проверьте состояние:
+   protoswitch.exe status --plain
    protoswitch.exe doctor
 4. Для фоновой работы включите автозапуск:
    protoswitch.exe autostart install
 5. Для ручной смены proxy:
    protoswitch.exe switch
-6. Запуск protoswitch.exe без аргументов открывает консоль управления.
+6. Для полной остановки всех процессов ProtoSwitch:
+   protoswitch.exe shutdown
 
 Что установлено
 
@@ -20,13 +21,19 @@ ProtoSwitch v0.1.0-beta.11
 - CHANGELOG.md
 - QUICKSTART.txt
 
-Сервисные пункты в меню Пуск
+Пункты в меню Пуск
 
 - ProtoSwitch
 - Починить ProtoSwitch
 - Удалить ProtoSwitch
 
-Что не удаляется автоматически при uninstall
+Важно
+
+- Фоновая ротация пишет managed proxy тихо и не поднимает окно Telegram.
+- Если Telegram уже открыт, новый proxy может быть помечен как ожидающий следующего запуска клиента.
+- Удаление программы снимает автозапуск, но не стирает пользовательские данные автоматически.
+
+Что остаётся после uninstall
 
 - %APPDATA%\ProtoSwitch\config.toml
 - %LOCALAPPDATA%\ProtoSwitch\state.json

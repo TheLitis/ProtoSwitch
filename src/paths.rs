@@ -112,7 +112,12 @@ mod tests {
         let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
         paths.ensure_dirs().unwrap();
         paths
-            .append_log_entry("warn", "telegram", "proxy rejected", Some("check status timeout"))
+            .append_log_entry(
+                "warn",
+                "telegram",
+                "proxy rejected",
+                Some("check status timeout"),
+            )
             .unwrap();
 
         let raw = fs::read_to_string(&paths.log_file).unwrap();

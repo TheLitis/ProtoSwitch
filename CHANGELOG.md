@@ -2,6 +2,39 @@
 
 Все заметные изменения проекта ProtoSwitch будут отражаться в этом файле.
 
+## [v0.2.0-beta.1] - 2026-04-23
+
+Beta-релиз, который переводит ProtoSwitch из чисто Windows-first прототипа в более широкую multi-platform beta-ветку: watcher теперь придерживается честной схемы `silent save + next launch` для уже открытого Telegram, TUI стал адаптивным и заметно спокойнее на узких окнах, release flow разделён на Windows installer и portable-артефакты для Windows, Linux и macOS, а GitHub Actions собирает и публикует все эти варианты автоматически.
+
+### Added
+
+- В `config.toml` закреплён блок `[telegram]` с `client`, `backend_mode` и опциональным `data_dir`.
+- Добавлен platform-layer для Linux/macOS с OS-native автозапуском:
+  - Linux: XDG autostart `.desktop`
+  - macOS: `LaunchAgent`
+- Добавлен multi-platform portable packaging и release matrix в `.github/workflows/release.yml`.
+- В релизную очередь теперь входят 6 артефактов:
+  - `ProtoSwitch-Setup-x64.exe`
+  - `protoswitch-portable-win-x64.zip`
+  - `protoswitch-portable-linux-x64.tar.gz`
+  - `protoswitch-portable-linux-arm64.tar.gz`
+  - `protoswitch-portable-macos-x64.tar.gz`
+  - `protoswitch-portable-macos-arm64.tar.gz`
+
+### Changed
+
+- Фоновый watcher больше не использует live-popup как основной путь: он тихо пишет ProtoSwitch-managed proxy в `settingss` и, если Telegram уже открыт, помечает состояние как ожидающее следующего запуска клиента.
+- Ручные `switch` и `repair` остаются `hybrid`: managed-path идёт первым, а live fallback остаётся только явным пользовательским сценарием.
+- TUI перестроен в `narrow / regular / wide` режимы, получил semantic colors, прокрутку сигналов через `PgUp/PgDn` и меньше агрессивного middle-ellipsis на статусных карточках.
+- `doctor` и plain status теперь отдельно показывают состояние источника, backend apply, путь применения, платформу и признак `waiting_for_restart`.
+- Decode-слой для внешних процессов и structured UTF-8 log writing усилены, чтобы ошибки PowerShell/Windows реже превращались в битый текст.
+- Windows distribution scripts переведены на общую portable packaging-схему, а manual publish script теперь работает со всеми файлами из `dist/<version>`.
+
+### Notes
+
+- Windows installer по-прежнему существует только для Windows x64; Linux и macOS в этой очереди идут как portable-first beta.
+- Для уже открытого Telegram фоновый успех — это `saved to managed settings`, а не мгновенный live-switch.
+
 ## [v0.1.0-beta.11] - 2026-04-23
 
 Бета-релиз для полировки интерфейса и безопасного повседневного запуска: ProtoSwitch больше не пытается навязчиво применять stale `pending proxy`, `doctor` в TUI выполняется в фоне, installer получил отдельную точку входа для починки, а README переписан в более чистом пользовательском виде.

@@ -17,6 +17,11 @@ ProtoSwitch portable
 6. Для автозапуска используйте:
    protoswitch autostart install
 
+Важно
+
+- Фоновая ротация использует managed settings backend и не должна воровать фокус у Telegram.
+- Если Telegram уже открыт, новый proxy может ждать следующего запуска клиента.
+
 Что входит в архив
 
 - ProtoSwitch
