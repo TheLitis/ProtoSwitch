@@ -629,6 +629,9 @@ fn print_plain_status_v2(
     let managed = telegram::managed_settings_status(&config.telegram).ok();
     println!("ProtoSwitch {}", APP_VERSION);
     println!("Платформа: {}", platform::current_os_label());
+    println!("Итог: {}", overall_summary_text(state));
+    println!("Фон: {}", background_summary_text(state));
+    println!("Следующий шаг: {}", next_step_text(state));
     println!("Статус proxy: {}", current_proxy_status_text(state));
     println!("Статус источника: {}", source_status_text(state));
     println!(
@@ -767,6 +770,104 @@ pub(crate) fn source_status_text(state: &AppState) -> String {
     }
 
     "нет данных".to_string()
+}
+
+pub(crate) fn overall_summary_text(state: &AppState) -> String {
+    let proxy_status = current_proxy_status_text(state);
+    let source_status = source_status_text(state);
+
+    if state.backend_restart_required {
+        return if state.watcher.telegram_running {
+            "Новый proxy уже сохранён тихо. Он применится после перезапуска Telegram."
+                .to_string()
+        } else {
+            "Proxy уже сохранён в managed settings и применится при следующем запуске Telegram."
+                .to_string()
+        };
+    }
+
+    if matches!(state.watcher.mode, WatcherMode::Error) {
+        return "Watcher упёрся в ошибку и ждёт следующего цикла или ручной проверки."
+            .to_string();
+    }
+
+    if status_contains_any(
+        &proxy_status,
+        &["актив", "работ", "доступ", "подключ", "online", "ok"],
+    ) {
+        return "Текущий proxy выглядит рабочим. ProtoSwitch просто следит за состоянием."
+            .to_string();
+    }
+
+    if state.pending_proxy.is_some() {
+        return if state.watcher.telegram_running {
+            "Есть подготовленный replacement proxy. Его можно применить вручную без нового fetch."
+                .to_string()
+        } else {
+            "Найден replacement proxy. ProtoSwitch дождётся Telegram и не будет мешать работе."
+                .to_string()
+        };
+    }
+
+    if status_contains_any(&source_status, &["источник пуст", "нет свободных"]) {
+        return "Сейчас свежего proxy нет. ProtoSwitch продолжит поиск в фоне.".to_string();
+    }
+
+    if state.current_proxy.is_none() && matches!(state.watcher.mode, WatcherMode::Idle) {
+        return "Watcher остановлен. ProtoSwitch сейчас только показывает состояние.".to_string();
+    }
+
+    if state.current_proxy.is_none() {
+        return "Рабочий proxy ещё не закреплён. ProtoSwitch подбирает подходящий вариант."
+            .to_string();
+    }
+
+    "ProtoSwitch держит состояние под контролем и ждёт следующей проверки.".to_string()
+}
+
+pub(crate) fn background_summary_text(state: &AppState) -> String {
+    if state.backend_restart_required {
+        return if state.watcher.telegram_running {
+            "Без popup и без захвата фокуса: просто перезапустите Telegram, когда будет удобно."
+                .to_string()
+        } else {
+            "Без popup и без захвата фокуса: replacement уже сохранён и ждёт запуска Telegram."
+                .to_string()
+        };
+    }
+
+    if state.watcher.telegram_running {
+        "Watcher не поднимает Telegram поверх окон и не просит подтверждений сам по себе."
+            .to_string()
+    } else {
+        "ProtoSwitch спокойно ждёт следующего запуска Telegram и может готовить replacement заранее."
+            .to_string()
+    }
+}
+
+pub(crate) fn next_step_text(state: &AppState) -> String {
+    if state.backend_restart_required && state.watcher.telegram_running {
+        return "Когда будет удобно, перезапустите Telegram.".to_string();
+    }
+
+    if state.current_proxy.is_none() && state.pending_proxy.is_none() {
+        return if matches!(state.watcher.mode, WatcherMode::Idle) {
+            "Запустите watcher, если хотите автоматическую смену proxy.".to_string()
+        } else {
+            "Можно дождаться следующего цикла watcher или запросить proxy вручную.".to_string()
+        };
+    }
+
+    if state.pending_proxy.is_some() && state.watcher.telegram_running {
+        return "При желании можно применить pending proxy вручную прямо сейчас.".to_string();
+    }
+
+    "Никаких действий не требуется.".to_string()
+}
+
+fn status_contains_any(value: &str, needles: &[&str]) -> bool {
+    let lower = value.to_lowercase();
+    needles.iter().any(|needle| lower.contains(needle))
 }
 
 fn normalize_source_status(raw: &str) -> String {
@@ -1749,4 +1850,51 @@ fn persist_watch_error(paths: &AppPaths, error: &str) -> anyhow::Result<()> {
     state.watcher.mode = WatcherMode::Error;
     state.save(&paths.state_file)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{background_summary_text, next_step_text, overall_summary_text};
+    use crate::model::{AppState, ProxyRecord, TelegramProxy, WatcherMode, WatcherSnapshot};
+
+    #[test]
+    fn summarizes_quiet_restart_flow() {
+        let state = AppState {
+            current_proxy: Some(ProxyRecord::new(
+                TelegramProxy::mtproto(
+                    "ovh.pl.1.mtproto.ru",
+                    443,
+                    "ee211122223333444455556666777788",
+                ),
+                "mtproto.ru",
+            )),
+            backend_restart_required: true,
+            watcher: WatcherSnapshot {
+                telegram_running: true,
+                ..WatcherSnapshot::default()
+            },
+            ..AppState::default()
+        };
+
+        assert!(overall_summary_text(&state).contains("сохранён тихо"));
+        assert!(background_summary_text(&state).contains("Без popup"));
+        assert_eq!(
+            next_step_text(&state),
+            "Когда будет удобно, перезапустите Telegram."
+        );
+    }
+
+    #[test]
+    fn summarizes_idle_empty_state() {
+        let state = AppState {
+            watcher: WatcherSnapshot {
+                mode: WatcherMode::Idle,
+                ..WatcherSnapshot::default()
+            },
+            ..AppState::default()
+        };
+
+        assert!(overall_summary_text(&state).contains("Watcher остановлен"));
+        assert!(next_step_text(&state).contains("Запустите watcher"));
+    }
 }

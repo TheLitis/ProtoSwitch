@@ -477,64 +477,14 @@ fn render_console(
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(5),
             Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(16),
+            Constraint::Min(14),
             Constraint::Length(3),
         ])
         .split(area);
 
-    let header = Paragraph::new(Line::from(vec![
-        Span::styled("ProtoSwitch", title_style()),
-        Span::raw(" "),
-        Span::styled(APP_VERSION, muted_style()),
-        Span::raw("  "),
-        badge(
-            if snapshot.watcher_online {
-                "watcher активен"
-            } else {
-                "watcher ждёт"
-            },
-            if snapshot.watcher_online {
-                Color::Rgb(118, 201, 160)
-            } else {
-                Color::Rgb(247, 190, 103)
-            },
-        ),
-        Span::raw(" "),
-        badge(
-            if snapshot.state.watcher.telegram_running {
-                "Telegram открыт"
-            } else {
-                "Telegram закрыт"
-            },
-            if snapshot.state.watcher.telegram_running {
-                Color::Rgb(109, 175, 255)
-            } else {
-                Color::Rgb(229, 118, 118)
-            },
-        ),
-        Span::raw(" "),
-        badge(
-            if snapshot.config.provider.enable_socks5_fallback {
-                "SOCKS5 готов"
-            } else {
-                "только MTProto"
-            },
-            if snapshot.config.provider.enable_socks5_fallback {
-                Color::Rgb(118, 201, 160)
-            } else {
-                Color::Rgb(247, 190, 103)
-            },
-        ),
-        Span::raw(" "),
-        badge(
-            compact(&app::current_proxy_status_text(&snapshot.state), 20),
-            tone_color(&app::current_proxy_status_text(&snapshot.state)),
-        ),
-    ]))
-    .block(panel("Сеанс"));
-    frame.render_widget(header, vertical[0]);
+    render_session_header(frame, vertical[0], snapshot);
 
     frame.render_widget(
         Paragraph::new(section_tabs(console.section))
@@ -1076,6 +1026,100 @@ fn width_mode(width: u16) -> WidthMode {
     } else {
         WidthMode::Wide
     }
+}
+
+fn render_session_header(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &UiSnapshot,
+) {
+    let current_status = app::current_proxy_status_text(&snapshot.state);
+    let summary = app::overall_summary_text(&snapshot.state);
+    let background = app::background_summary_text(&snapshot.state);
+    let panel = panel("Сеанс");
+    let inner = panel.inner(area);
+    frame.render_widget(panel, area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            session_badges_line(snapshot, &current_status, inner.width),
+            Line::from(vec![
+                Span::styled("Итог       ", muted_style()),
+                Span::styled(
+                    compact_to_width(&summary, inner.width, 12),
+                    semantic_style(&summary),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Фон        ", muted_style()),
+                Span::styled(compact_to_width(&background, inner.width, 12), text_style()),
+            ]),
+        ])
+        .wrap(Wrap { trim: true }),
+        inner,
+    );
+}
+
+fn session_badges_line(snapshot: &UiSnapshot, current_status: &str, width: u16) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled("ProtoSwitch", title_style()),
+        Span::raw(" "),
+        Span::styled(APP_VERSION, muted_style()),
+    ];
+    let mode = width_mode(width);
+    let mut push_badge = |text: String, background: Color| {
+        spans.push(Span::raw("  "));
+        spans.push(badge(text, background));
+    };
+
+    push_badge(
+        if snapshot.watcher_online {
+            "watcher активен".to_string()
+        } else {
+            "watcher ждёт".to_string()
+        },
+        if snapshot.watcher_online {
+            Color::Rgb(118, 201, 160)
+        } else {
+            Color::Rgb(247, 190, 103)
+        },
+    );
+
+    if !matches!(mode, WidthMode::Narrow) {
+        push_badge(
+            if snapshot.state.watcher.telegram_running {
+                "Telegram открыт".to_string()
+            } else {
+                "Telegram закрыт".to_string()
+            },
+            if snapshot.state.watcher.telegram_running {
+                Color::Rgb(109, 175, 255)
+            } else {
+                Color::Rgb(229, 118, 118)
+            },
+        );
+    }
+
+    if matches!(mode, WidthMode::Wide) {
+        push_badge(
+            if snapshot.config.provider.enable_socks5_fallback {
+                "SOCKS5 готов".to_string()
+            } else {
+                "только MTProto".to_string()
+            },
+            if snapshot.config.provider.enable_socks5_fallback {
+                Color::Rgb(118, 201, 160)
+            } else {
+                Color::Rgb(247, 190, 103)
+            },
+        );
+    }
+
+    push_badge(
+        compact_to_width(current_status, width, 24),
+        tone_color(current_status),
+    );
+
+    Line::from(spans)
 }
 
 fn render_dashboard_responsive(
@@ -3126,5 +3170,14 @@ mod tests {
             watcher_online: true,
             paths,
         }
+    }
+
+    #[test]
+    fn renders_session_header_with_human_summary() {
+        let rendered = render_console_text(120, 34, ConsoleSection::Dashboard);
+
+        assert!(rendered.contains("Итог"));
+        assert!(rendered.contains("Фон"));
+        assert!(rendered.contains("сохранён тихо") || rendered.contains("перезапуска Telegram"));
     }
 }
