@@ -2,20 +2,20 @@ use std::path::Path;
 
 use crate::model::AutostartMethod;
 
-#[cfg(windows)]
-#[path = "../windows.rs"]
-mod windows_impl;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-
 #[cfg(windows)]
-pub use windows_impl::AutostartStatus;
+#[path = "../windows.rs"]
+mod windows_impl;
+
 #[cfg(target_os = "linux")]
 pub use linux::AutostartStatus;
 #[cfg(target_os = "macos")]
 pub use macos::AutostartStatus;
+#[cfg(windows)]
+pub use windows_impl::AutostartStatus;
 
 pub fn current_os_label() -> &'static str {
     #[cfg(windows)]

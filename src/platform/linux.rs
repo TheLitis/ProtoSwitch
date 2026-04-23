@@ -61,7 +61,10 @@ fn desktop_entry_path() -> anyhow::Result<PathBuf> {
         .context("Не удалось определить домашний каталог")?
         .home_dir()
         .to_path_buf();
-    Ok(home.join(".config").join("autostart").join(DESKTOP_FILE_NAME))
+    Ok(home
+        .join(".config")
+        .join("autostart")
+        .join(DESKTOP_FILE_NAME))
 }
 
 fn desktop_entry(executable: &Path) -> String {

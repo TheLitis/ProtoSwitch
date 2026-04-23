@@ -19,8 +19,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem,
 use crate::APP_VERSION;
 use crate::app;
 use crate::model::{AppConfig, AppState, AutostartMethod, ProxyKind, WatcherMode};
-use crate::platform;
 use crate::paths::AppPaths;
+use crate::platform;
 
 pub fn stdout_is_terminal() -> bool {
     io::stdout().is_terminal()
@@ -544,11 +544,15 @@ fn render_console(
     );
 
     match console.section {
-        ConsoleSection::Dashboard => render_dashboard_responsive(frame, vertical[2], snapshot, console),
+        ConsoleSection::Dashboard => {
+            render_dashboard_responsive(frame, vertical[2], snapshot, console)
+        }
         ConsoleSection::Actions => {
             render_actions_responsive(frame, vertical[2], paths, snapshot, console, actions)
         }
-        ConsoleSection::Providers => render_providers_responsive(frame, vertical[2], snapshot, console),
+        ConsoleSection::Providers => {
+            render_providers_responsive(frame, vertical[2], snapshot, console)
+        }
         ConsoleSection::History => render_history_responsive(frame, vertical[2], snapshot, console),
     }
 
@@ -1137,7 +1141,10 @@ fn render_dashboard_responsive(
             ]),
             Line::from(vec![
                 Span::styled("Status   ", muted_style()),
-                Span::styled(compact_to_width(&proxy_status, width, 14), semantic_style(&proxy_status)),
+                Span::styled(
+                    compact_to_width(&proxy_status, width, 14),
+                    semantic_style(&proxy_status),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Source   ", muted_style()),
@@ -1171,94 +1178,106 @@ fn render_dashboard_responsive(
                     pending_style,
                 ),
             ]),
-            kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref()), width),
-            kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref()), width),
+            kv_line(
+                "Last apply",
+                format_time(snapshot.state.last_apply_at.as_ref()),
+                width,
+            ),
+            kv_line(
+                "Last fetch",
+                format_time(snapshot.state.last_fetch_at.as_ref()),
+                width,
+            ),
         ]
     };
 
     let runtime_lines = |width: u16| {
-        vec![
-            kv_line(
-                "Watcher",
-                format!(
-                    "{} / fail {}/{}",
-                    mode_label(&snapshot.state.watcher.mode),
-                    snapshot.state.watcher.failure_streak,
-                    snapshot.config.watcher.failure_threshold
-                ),
-                width,
+        let mut lines = Vec::new();
+        lines.extend(kv_lines(
+            "Watcher",
+            format!(
+                "{} / fail {}/{}",
+                mode_label(&snapshot.state.watcher.mode),
+                snapshot.state.watcher.failure_streak,
+                snapshot.config.watcher.failure_threshold
             ),
-            kv_line(
-                "Telegram",
-                if snapshot.state.watcher.telegram_running {
-                    "запущен".to_string()
-                } else {
-                    "не запущен".to_string()
-                },
-                width,
-            ),
-            kv_line("Источник", source_status.clone(), width),
-            kv_line(
-                "Автозапуск",
-                if snapshot.autostart.installed || snapshot.config.autostart.enabled {
-                    snapshot
-                        .autostart
-                        .method
-                        .as_ref()
-                        .map(autostart_method_label)
-                        .unwrap_or("pending")
-                        .to_string()
-                } else {
-                    "выключен".to_string()
-                },
-                width,
-            ),
-            kv_line("Платформа", platform::current_os_label().to_string(), width),
-            kv_line(
-                "След. проверка",
-                format_time(snapshot.state.watcher.next_check_at.as_ref()),
-                width,
-            ),
-        ]
+            width,
+        ));
+        lines.extend(kv_lines(
+            "Telegram",
+            if snapshot.state.watcher.telegram_running {
+                "запущен".to_string()
+            } else {
+                "не запущен".to_string()
+            },
+            width,
+        ));
+        lines.extend(kv_lines("Источник", source_status.clone(), width));
+        lines.extend(kv_lines(
+            "Автозапуск",
+            if snapshot.autostart.installed || snapshot.config.autostart.enabled {
+                snapshot
+                    .autostart
+                    .method
+                    .as_ref()
+                    .map(autostart_method_label)
+                    .unwrap_or("pending")
+                    .to_string()
+            } else {
+                "выключен".to_string()
+            },
+            width,
+        ));
+        lines.extend(kv_lines(
+            "Платформа",
+            platform::current_os_label().to_string(),
+            width,
+        ));
+        lines.extend(kv_lines(
+            "След. проверка",
+            format_time(snapshot.state.watcher.next_check_at.as_ref()),
+            width,
+        ));
+        lines
     };
 
     let backend_lines = |width: u16| {
-        vec![
-            kv_line("Статус", backend_status.clone(), width),
-            kv_line("Путь", backend_route.clone(), width),
-            kv_line(
-                "Режим",
-                format!("{:?}", snapshot.config.telegram.backend_mode).to_ascii_lowercase(),
-                width,
-            ),
-            kv_line(
-                "Рестарт",
-                if snapshot.state.backend_restart_required {
-                    "нужен".to_string()
-                } else {
-                    "нет".to_string()
-                },
-                width,
-            ),
-            kv_line(
-                "Авточистка",
-                if snapshot.config.watcher.auto_cleanup_dead_proxies {
-                    "включена".to_string()
-                } else {
-                    "выключена".to_string()
-                },
-                width,
-            ),
-            kv_line(
-                "SOCKS5",
-                if snapshot.config.provider.enable_socks5_fallback {
-                    "fallback включён".to_string()
-                } else {
-                    "fallback выключен".to_string()
-                },
-                width,
-            ),
-        ]
+        let mut lines = Vec::new();
+        lines.extend(kv_lines("Статус", backend_status.clone(), width));
+        lines.extend(kv_lines("Путь", backend_route.clone(), width));
+        lines.extend(kv_lines(
+            "Режим",
+            format!("{:?}", snapshot.config.telegram.backend_mode).to_ascii_lowercase(),
+            width,
+        ));
+        lines.extend(kv_lines(
+            "Рестарт",
+            if snapshot.state.backend_restart_required {
+                "нужен".to_string()
+            } else {
+                "нет".to_string()
+            },
+            width,
+        ));
+        lines.extend(kv_lines(
+            "Авточистка",
+            if snapshot.config.watcher.auto_cleanup_dead_proxies {
+                "включена".to_string()
+            } else {
+                "выключена".to_string()
+            },
+            width,
+        ));
+        lines.extend(kv_lines(
+            "SOCKS5",
+            if snapshot.config.provider.enable_socks5_fallback {
+                "fallback включён".to_string()
+            } else {
+                "fallback выключен".to_string()
+            },
+            width,
+        ));
+        lines
     };
 
     match width_mode(area.width) {
@@ -1293,8 +1312,16 @@ fn render_dashboard_responsive(
             );
             frame.render_widget(
                 Paragraph::new(vec![
-                    kv_line("Pool", app::provider_pool_summary(&snapshot.config), rows[3].width),
-                    kv_line("Feeds", app::enabled_sources_summary(&snapshot.config), rows[3].width),
+                    kv_line(
+                        "Pool",
+                        app::provider_pool_summary(&snapshot.config),
+                        rows[3].width,
+                    ),
+                    kv_line(
+                        "Feeds",
+                        app::enabled_sources_summary(&snapshot.config),
+                        rows[3].width,
+                    ),
                     kv_line("Ready", format!("{ready_count}/3 ready"), rows[3].width),
                     kv_line(
                         "Failures",
@@ -1390,14 +1417,22 @@ fn render_dashboard_responsive(
                 "Ready",
                 ready_count as f64 / 3.0,
                 &format!("{ready_count}/3 ready"),
-                &compact_to_width(&app::enabled_sources_summary(&snapshot.config), gauges[2].width, 10),
+                &compact_to_width(
+                    &app::enabled_sources_summary(&snapshot.config),
+                    gauges[2].width,
+                    10,
+                ),
             );
             render_activity_panel(frame, rows[3], console);
         }
         WidthMode::Wide => {
             let rows = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(8), Constraint::Length(7), Constraint::Min(6)])
+                .constraints([
+                    Constraint::Length(8),
+                    Constraint::Length(7),
+                    Constraint::Min(6),
+                ])
                 .split(area);
             let hero = Layout::default()
                 .direction(Direction::Horizontal)
@@ -1459,7 +1494,11 @@ fn render_dashboard_responsive(
                 "Ready",
                 ready_count as f64 / 3.0,
                 &format!("{ready_count}/3 ready"),
-                &compact_to_width(&app::enabled_sources_summary(&snapshot.config), middle[2].width, 10),
+                &compact_to_width(
+                    &app::enabled_sources_summary(&snapshot.config),
+                    middle[2].width,
+                    10,
+                ),
             );
             render_activity_panel(frame, rows[2], console);
         }
@@ -1502,7 +1541,11 @@ fn render_actions_responsive(
         WidthMode::Narrow => {
             let rows = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(12), Constraint::Length(10), Constraint::Min(6)])
+                .constraints([
+                    Constraint::Length(12),
+                    Constraint::Length(10),
+                    Constraint::Min(6),
+                ])
                 .split(area);
             frame.render_widget(List::new(action_items).block(panel("Команды")), rows[0]);
             frame.render_widget(
@@ -1643,23 +1686,24 @@ fn render_providers_responsive(
                 bottom[0],
             );
             frame.render_widget(
-                Paragraph::new(vec![
-                    kv_line(
+                Paragraph::new({
+                    let mut lines = Vec::new();
+                    lines.extend(kv_lines(
                         "Fetch tries",
                         snapshot.config.provider.fetch_attempts.to_string(),
                         bottom[1].width,
-                    ),
-                    kv_line(
+                    ));
+                    lines.extend(kv_lines(
                         "Retry delay",
                         format!("{} ms", snapshot.config.provider.fetch_retry_delay_ms),
                         bottom[1].width,
-                    ),
-                    kv_line(
+                    ));
+                    lines.extend(kv_lines(
                         "Active feeds",
                         snapshot.config.provider.active_sources().len().to_string(),
                         bottom[1].width,
-                    ),
-                    kv_line(
+                    ));
+                    lines.extend(kv_lines(
                         "Current source",
                         snapshot
                             .state
@@ -1668,8 +1712,8 @@ fn render_providers_responsive(
                             .map(|record| record.source.clone())
                             .unwrap_or_else(|| "ещё не закреплён".to_string()),
                         bottom[1].width,
-                    ),
-                    kv_line(
+                    ));
+                    lines.extend(kv_lines(
                         "Last error",
                         snapshot
                             .state
@@ -1677,9 +1721,10 @@ fn render_providers_responsive(
                             .clone()
                             .unwrap_or_else(|| "нет".to_string()),
                         bottom[1].width,
-                    ),
-                    Line::from(""),
-                ])
+                    ));
+                    lines.push(Line::from(""));
+                    lines
+                })
                 .block(panel("Политика"))
                 .wrap(Wrap { trim: true }),
                 bottom[1],
@@ -1698,17 +1743,31 @@ fn render_history_responsive(
         WidthMode::Narrow => {
             let rows = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(8), Constraint::Length(9), Constraint::Min(6)])
+                .constraints([
+                    Constraint::Min(8),
+                    Constraint::Length(9),
+                    Constraint::Min(6),
+                ])
                 .split(area);
             frame.render_widget(
-                List::new(history_items(&snapshot.state, rows[0].width)).block(panel("Последние proxy")),
+                List::new(history_items(&snapshot.state, rows[0].width))
+                    .block(panel("Последние proxy")),
                 rows[0],
             );
             frame.render_widget(
-                Paragraph::new(vec![
-                    kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref()), rows[1].width),
-                    kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref()), rows[1].width),
-                    kv_line(
+                Paragraph::new({
+                    let mut lines = Vec::new();
+                    lines.extend(kv_lines(
+                        "Last fetch",
+                        format_time(snapshot.state.last_fetch_at.as_ref()),
+                        rows[1].width,
+                    ));
+                    lines.extend(kv_lines(
+                        "Last apply",
+                        format_time(snapshot.state.last_apply_at.as_ref()),
+                        rows[1].width,
+                    ));
+                    lines.extend(kv_lines(
                         "Current source",
                         snapshot
                             .state
@@ -1717,11 +1776,24 @@ fn render_history_responsive(
                             .map(|record| record.source.clone())
                             .unwrap_or_else(|| "нет".to_string()),
                         rows[1].width,
-                    ),
-                    kv_line("Config", snapshot.paths.config_file.display().to_string(), rows[1].width),
-                    kv_line("State", snapshot.paths.state_file.display().to_string(), rows[1].width),
-                    kv_line("Log", snapshot.paths.log_file.display().to_string(), rows[1].width),
-                ])
+                    ));
+                    lines.extend(kv_lines(
+                        "Config",
+                        snapshot.paths.config_file.display().to_string(),
+                        rows[1].width,
+                    ));
+                    lines.extend(kv_lines(
+                        "State",
+                        snapshot.paths.state_file.display().to_string(),
+                        rows[1].width,
+                    ));
+                    lines.extend(kv_lines(
+                        "Log",
+                        snapshot.paths.log_file.display().to_string(),
+                        rows[1].width,
+                    ));
+                    lines
+                })
                 .block(panel("Хронология"))
                 .wrap(Wrap { trim: true }),
                 rows[1],
@@ -1743,10 +1815,19 @@ fn render_history_responsive(
                 .constraints([Constraint::Length(10), Constraint::Min(8)])
                 .split(columns[1]);
             frame.render_widget(
-                Paragraph::new(vec![
-                    kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref()), right[0].width),
-                    kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref()), right[0].width),
-                    kv_line(
+                Paragraph::new({
+                    let mut lines = Vec::new();
+                    lines.extend(kv_lines(
+                        "Last fetch",
+                        format_time(snapshot.state.last_fetch_at.as_ref()),
+                        right[0].width,
+                    ));
+                    lines.extend(kv_lines(
+                        "Last apply",
+                        format_time(snapshot.state.last_apply_at.as_ref()),
+                        right[0].width,
+                    ));
+                    lines.extend(kv_lines(
                         "Current source",
                         snapshot
                             .state
@@ -1755,11 +1836,24 @@ fn render_history_responsive(
                             .map(|record| record.source.clone())
                             .unwrap_or_else(|| "нет".to_string()),
                         right[0].width,
-                    ),
-                    kv_line("Config", snapshot.paths.config_file.display().to_string(), right[0].width),
-                    kv_line("State", snapshot.paths.state_file.display().to_string(), right[0].width),
-                    kv_line("Log", snapshot.paths.log_file.display().to_string(), right[0].width),
-                ])
+                    ));
+                    lines.extend(kv_lines(
+                        "Config",
+                        snapshot.paths.config_file.display().to_string(),
+                        right[0].width,
+                    ));
+                    lines.extend(kv_lines(
+                        "State",
+                        snapshot.paths.state_file.display().to_string(),
+                        right[0].width,
+                    ));
+                    lines.extend(kv_lines(
+                        "Log",
+                        snapshot.paths.log_file.display().to_string(),
+                        right[0].width,
+                    ));
+                    lines
+                })
                 .block(panel("Хронология"))
                 .wrap(Wrap { trim: true }),
                 right[0],
@@ -1769,16 +1863,9 @@ fn render_history_responsive(
     }
 }
 
-fn render_activity_panel(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    console: &ConsoleState,
-) {
+fn render_activity_panel(frame: &mut ratatui::Frame<'_>, area: Rect, console: &ConsoleState) {
     frame.render_widget(
-        Paragraph::new(console.activity_lines_for_area(
-            area.width,
-            area.height.saturating_sub(2),
-        ))
+        Paragraph::new(console.activity_lines_for_area(area.width, area.height.saturating_sub(2)))
             .block(panel("Сигналы"))
             .wrap(Wrap { trim: true }),
         area,
@@ -2082,13 +2169,37 @@ fn find_action(actions: &[ConsoleAction], needle: ConsoleAction) -> Option<Conso
     actions.iter().copied().find(|action| *action == needle)
 }
 
-fn kv_line(label: &str, value: String, width: u16) -> Line<'static> {
+fn kv_line(label: &str, value: String, _width: u16) -> Line<'static> {
     let label_width = label.chars().count().clamp(6, 10);
-    let value_width = width.saturating_sub(label_width as u16 + 3).max(12) as usize;
     Line::from(vec![
         Span::styled(format!("{label:<label_width$}"), muted_style()),
-        Span::styled(compact(&value, value_width), text_style()),
+        Span::styled(value, text_style()),
     ])
+}
+
+fn kv_lines(label: &str, value: String, width: u16) -> Vec<Line<'static>> {
+    let label_width = label.chars().count().clamp(6, 10);
+    let value_width = width.saturating_sub(label_width as u16 + 3).max(12) as usize;
+    let wrapped = wrap_value_lines(&value, value_width, 2);
+    let indent = " ".repeat(label_width);
+
+    wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            Line::from(vec![
+                Span::styled(
+                    if index == 0 {
+                        format!("{label:<label_width$}")
+                    } else {
+                        indent.clone()
+                    },
+                    muted_style(),
+                ),
+                Span::styled(chunk, text_style()),
+            ])
+        })
+        .collect()
 }
 
 fn compact_to_width(value: &str, width: u16, reserve: u16) -> String {
@@ -2112,6 +2223,55 @@ fn compact(value: &str, max: usize) -> String {
         .rev()
         .collect::<String>();
     format!("{prefix} ... {suffix}")
+}
+
+fn wrap_value_lines(value: &str, width: usize, max_lines: usize) -> Vec<String> {
+    if max_lines == 0 || width == 0 {
+        return Vec::new();
+    }
+    if value.chars().count() <= width {
+        return vec![value.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut remaining = value.trim();
+    while !remaining.is_empty() && lines.len() + 1 < max_lines {
+        let mut current = String::new();
+        let mut consumed = 0usize;
+        for (index, token) in remaining.split_whitespace().enumerate() {
+            let token_len = token.chars().count();
+            let next_len = if index == 0 {
+                token_len
+            } else {
+                current.chars().count() + 1 + token_len
+            };
+            if next_len > width {
+                break;
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(token);
+            consumed += token.len();
+            if index + 1 < remaining.split_whitespace().count() {
+                consumed += 1;
+            }
+        }
+
+        if current.is_empty() {
+            current = remaining.chars().take(width).collect::<String>();
+            consumed = current.len();
+        }
+
+        lines.push(current.trim().to_string());
+        remaining = remaining.get(consumed..).unwrap_or_default().trim_start();
+    }
+
+    if !remaining.is_empty() {
+        lines.push(compact(remaining, width));
+    }
+
+    lines
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -2158,6 +2318,7 @@ fn format_record_time(value: chrono::DateTime<chrono::Utc>) -> String {
 fn tone_color(value: &str) -> Color {
     let lower = value.to_lowercase();
     if lower.contains("работ")
+        || lower.contains("актив")
         || lower.contains("подключ")
         || lower.contains("доступ")
         || lower.contains("online")
@@ -2174,6 +2335,7 @@ fn tone_color(value: &str) -> Color {
         || lower.contains("checking")
         || lower.contains("manual")
         || lower.contains("idle")
+        || lower.contains("источник пуст")
         || lower.contains("ожид")
         || lower.contains("перезапуск")
         || lower.contains("paused")
@@ -2862,6 +3024,20 @@ mod tests {
         assert!(first.contains("signal-11"));
     }
 
+    #[test]
+    fn wraps_long_status_values_without_dropping_context() {
+        let lines = wrap_value_lines(
+            "источник пуст: нет свободных proxy, ждём следующую проверку и сохраняем managed replacement",
+            28,
+            2,
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("источник пуст"));
+        assert!(!lines[1].is_empty());
+        assert!(lines.join(" ").contains("proxy"));
+    }
+
     fn render_console_text(width: u16, height: u16, section: ConsoleSection) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2901,7 +3077,11 @@ mod tests {
         let mut config = AppConfig::default();
         config.telegram.backend_mode = TelegramBackendMode::Managed;
         let current = ProxyRecord::new(
-            TelegramProxy::mtproto("ovh.pl.1.mtproto.ru", 443, "ee211122223333444455556666777788"),
+            TelegramProxy::mtproto(
+                "ovh.pl.1.mtproto.ru",
+                443,
+                "ee211122223333444455556666777788",
+            ),
             "mtproto.ru",
         );
         let pending = ProxyRecord::new(

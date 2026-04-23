@@ -1,8 +1,8 @@
 mod app;
 mod cli;
 mod model;
-mod platform;
 mod paths;
+mod platform;
 mod provider;
 mod tdesktop;
 mod telegram;

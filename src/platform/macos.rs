@@ -54,10 +54,7 @@ fn launch_agent_path() -> anyhow::Result<PathBuf> {
         .context("Не удалось определить домашний каталог")?
         .home_dir()
         .to_path_buf();
-    Ok(home
-        .join("Library")
-        .join("LaunchAgents")
-        .join(PLIST_NAME))
+    Ok(home.join("Library").join("LaunchAgents").join(PLIST_NAME))
 }
 
 fn launch_agent_plist(executable: &Path) -> String {
@@ -88,7 +85,9 @@ mod tests {
 
     #[test]
     fn launch_agent_contains_program_arguments() {
-        let body = launch_agent_plist(Path::new("/Applications/ProtoSwitch.app/Contents/MacOS/protoswitch"));
+        let body = launch_agent_plist(Path::new(
+            "/Applications/ProtoSwitch.app/Contents/MacOS/protoswitch",
+        ));
         assert!(body.contains("<string>watch</string>"));
         assert!(body.contains("<string>--headless</string>"));
         assert!(body.contains("com.thelitis.protoswitch"));
