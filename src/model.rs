@@ -183,6 +183,7 @@ impl ProviderSource {
 #[serde(default)]
 pub struct AppConfig {
     pub app_version: String,
+    pub telegram: TelegramConfig,
     pub provider: ProviderConfig,
     pub watcher: WatcherConfig,
     pub autostart: AutostartConfig,
@@ -192,9 +193,44 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             app_version: APP_VERSION.to_string(),
+            telegram: TelegramConfig::default(),
             provider: ProviderConfig::default(),
             watcher: WatcherConfig::default(),
             autostart: AutostartConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TelegramClient {
+    #[default]
+    Desktop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TelegramBackendMode {
+    Managed,
+    #[default]
+    Hybrid,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelegramConfig {
+    pub client: TelegramClient,
+    pub backend_mode: TelegramBackendMode,
+    pub data_dir: Option<String>,
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            client: TelegramClient::Desktop,
+            backend_mode: TelegramBackendMode::Hybrid,
+            data_dir: None,
         }
     }
 }
@@ -620,6 +656,7 @@ mod tests {
 
         let legacy = AppConfig {
             app_version: "0.1.0-beta.11".to_string(),
+            telegram: TelegramConfig::default(),
             provider: ProviderConfig {
                 source_url: "https://mtproto.ru/personal.php".to_string(),
                 sources: vec![
