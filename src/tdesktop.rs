@@ -449,6 +449,29 @@ pub fn write_proxy_settings_override(
     Ok(settings_file_path(&tdata_dir))
 }
 
+#[cfg(test)]
+pub(crate) fn seed_test_proxy_settings(
+    tdata_dir: &Path,
+    settings: &DesktopProxySettings,
+) -> anyhow::Result<PathBuf> {
+    fs::create_dir_all(tdata_dir)
+        .with_context(|| format!("Не удалось создать {}", tdata_dir.display()))?;
+    let settings_path = settings_file_path(tdata_dir);
+    let mut file = if settings_path.exists() {
+        TelegramDesktopSettings::load_from_tdata(tdata_dir)?
+    } else {
+        fresh_test_settings_file()
+    };
+    file.set_legacy_proxy_override(settings);
+    file.save_to_tdata(tdata_dir)?;
+    Ok(settings_path)
+}
+
+#[cfg(test)]
+pub(crate) fn read_test_proxy_settings(tdata_dir: &Path) -> anyhow::Result<DesktopProxySettings> {
+    TelegramDesktopSettings::load_from_tdata(tdata_dir)?.proxy_settings()
+}
+
 fn settings_file_path(tdata_dir: &Path) -> PathBuf {
     let modern = tdata_dir.join(SETTINGS_FILE_NAME);
     if modern.exists() {
@@ -456,6 +479,66 @@ fn settings_file_path(tdata_dir: &Path) -> PathBuf {
     } else {
         tdata_dir.join(SETTINGS_FILE_STEM)
     }
+}
+
+#[cfg(test)]
+fn fresh_test_settings_file() -> TelegramDesktopSettings {
+    TelegramDesktopSettings {
+        version: 5_001_001,
+        salt: vec![7_u8; LOCAL_ENCRYPT_SALT_SIZE],
+        blocks: vec![
+            SettingsBlock {
+                id: DBI_AUTO_START,
+                payload: {
+                    let mut writer = QtWriter::new();
+                    writer.write_i32(0);
+                    writer.finish()
+                },
+            },
+            SettingsBlock {
+                id: DBI_APPLICATION_SETTINGS,
+                payload: {
+                    let proxy_blob = DesktopProxySettings::default().to_proxy_blob();
+                    let application_settings =
+                        build_test_application_settings_prefix(&proxy_blob);
+                    let mut writer = QtWriter::new();
+                    writer.write_bytearray(&application_settings);
+                    writer.finish()
+                },
+            },
+        ],
+    }
+}
+
+#[cfg(test)]
+fn build_test_application_settings_prefix(proxy_blob: &[u8]) -> Vec<u8> {
+    let mut writer = QtWriter::new();
+    writer.write_bytearray(&[]);
+    for _ in 0..5 {
+        writer.write_i32(0);
+    }
+    writer.write_string("");
+    writer.write_bytearray(&[]);
+    for _ in 0..9 {
+        writer.write_i32(0);
+    }
+    writer.write_string("");
+    writer.write_string("");
+    for _ in 0..5 {
+        writer.write_i32(0);
+    }
+    writer.write_i32(0);
+    for _ in 0..13 {
+        writer.write_i32(0);
+    }
+    writer.write_bytearray(&[]);
+    writer.write_i32(0);
+    for _ in 0..12 {
+        writer.write_i32(0);
+    }
+    writer.write_bytearray(proxy_blob);
+    writer.write_bytearray(&[]);
+    writer.finish()
 }
 
 fn parse_settings_file(bytes: &[u8]) -> anyhow::Result<TelegramDesktopSettings> {
@@ -1318,30 +1401,7 @@ mod tests {
     fn settings_file_roundtrip_keeps_legacy_override() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("settingss");
-        let mut settings = TelegramDesktopSettings {
-            version: 5_001_001,
-            salt: vec![7_u8; LOCAL_ENCRYPT_SALT_SIZE],
-            blocks: vec![
-                SettingsBlock {
-                    id: DBI_AUTO_START,
-                    payload: {
-                        let mut writer = QtWriter::new();
-                        writer.write_i32(0);
-                        writer.finish()
-                    },
-                },
-                SettingsBlock {
-                    id: DBI_APPLICATION_SETTINGS,
-                    payload: {
-                        let proxy_blob = DesktopProxySettings::default().to_proxy_blob();
-                        let application_settings = build_application_settings_prefix(&proxy_blob);
-                        let mut writer = QtWriter::new();
-                        writer.write_bytearray(&application_settings);
-                        writer.finish()
-                    },
-                },
-            ],
-        };
+        let mut settings = fresh_test_settings_file();
         settings.set_legacy_proxy_override(&DesktopProxySettings {
             mode: DesktopProxyMode::Enabled,
             selected: Some(DesktopProxy {
@@ -1366,6 +1426,35 @@ mod tests {
         let proxy = restored.proxy_settings().unwrap();
         assert_eq!(proxy.mode, DesktopProxyMode::Enabled);
         assert_eq!(proxy.selected.unwrap().host, "127.0.0.1");
+    }
+
+    #[test]
+    fn test_seed_helper_roundtrips_proxy_settings() {
+        let temp = tempdir().unwrap();
+        let tdata_dir = temp.path().join("tdata");
+        let settings = DesktopProxySettings {
+            mode: DesktopProxyMode::Enabled,
+            selected: Some(DesktopProxy {
+                kind: DesktopProxyType::Mtproto,
+                host: "managed.example".to_string(),
+                port: 443,
+                user: String::new(),
+                password: "secret".to_string(),
+            }),
+            list: vec![DesktopProxy {
+                kind: DesktopProxyType::Mtproto,
+                host: "managed.example".to_string(),
+                port: 443,
+                user: String::new(),
+                password: "secret".to_string(),
+            }],
+            ..DesktopProxySettings::default()
+        };
+
+        seed_test_proxy_settings(&tdata_dir, &settings).unwrap();
+        let restored = read_test_proxy_settings(&tdata_dir).unwrap();
+        assert_eq!(restored.mode, DesktopProxyMode::Enabled);
+        assert_eq!(restored.selected.unwrap().host, "managed.example");
     }
 
     #[test]
