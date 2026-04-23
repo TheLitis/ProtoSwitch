@@ -1,5 +1,8 @@
+use std::fs;
+use std::path::Path;
 use std::process::Output;
 
+use anyhow::Context;
 use encoding_rs::{Encoding, IBM866, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1251};
 
 pub fn decode_output(output: &Output) -> String {
@@ -41,6 +44,12 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
         .max_by_key(|item| item.score)
         .map(|item| item.value)
         .unwrap_or_else(|| sanitize_decoded_text(&String::from_utf8_lossy(bytes)))
+}
+
+pub fn read_text_file(path: &Path) -> anyhow::Result<String> {
+    let bytes =
+        fs::read(path).with_context(|| format!("Не удалось прочитать {}", path.display()))?;
+    Ok(decode_bytes(&bytes))
 }
 
 fn candidate(bytes: &[u8], encoding: &'static Encoding) -> DecodedCandidate {
@@ -142,5 +151,15 @@ mod tests {
         let bytes = b"\xef\xbb\xbf\x00\x00Telegram error\x00";
         let value = decode_bytes(bytes);
         assert_eq!(value, "Telegram error");
+    }
+
+    #[test]
+    fn decodes_utf16le_bytes() {
+        let mut bytes = vec![0xff, 0xfe];
+        for unit in "Ошибка".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let value = decode_bytes(&bytes);
+        assert_eq!(value, "Ошибка");
     }
 }

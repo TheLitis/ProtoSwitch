@@ -15,8 +15,8 @@ use crate::cli::{
 use crate::model::{
     AppConfig, AppState, AutostartMethod, InitOverrides, MtProtoProxy, ProxyRecord, WatcherMode,
 };
-use crate::platform;
 use crate::paths::AppPaths;
+use crate::platform;
 use crate::provider::MtProtoProvider;
 use crate::telegram;
 use crate::ui;
@@ -355,9 +355,9 @@ fn watch_cycle(
     );
     if state.current_proxy_status.trim().is_empty() {
         state.set_current_proxy_status(if state.current_proxy.is_some() {
-            "awaiting check"
+            "ожидает проверки"
         } else {
-            "not selected"
+            "не выбран"
         });
     }
     if state.source_status.trim().is_empty() {
@@ -376,7 +376,7 @@ fn watch_cycle(
                 "proxy сохранён, ждёт запуска Telegram"
             });
             if state.source_status.trim().is_empty() {
-                state.set_source_status("управляемый proxy записан в settingss");
+                state.set_source_status("replacement proxy уже сохранён в settingss");
             }
             state.save(&paths.state_file)?;
             return Ok(if headless {
@@ -394,7 +394,7 @@ fn watch_cycle(
         state.watcher.failure_streak = 0;
         state.set_current_proxy_status("ещё нет proxy под управлением");
         state.set_source_status(if state.pending_proxy.is_some() {
-            "есть pending proxy, но нужен ручной apply"
+            "replacement proxy уже сохранён, ждём ручной apply"
         } else {
             "авторотация ждёт первого ручного switch"
         });
@@ -421,7 +421,7 @@ fn watch_cycle(
         }
         state.watcher.mode = WatcherMode::Watching;
         state.mark_healthy();
-        state.set_source_status("источник не запрашивался");
+        state.set_source_status("источник не запрашивался: текущий proxy активен");
         state.save(&paths.state_file)?;
         return Ok("Proxy остаётся рабочим.".to_string());
     }
@@ -465,7 +465,7 @@ fn watch_cycle(
     if state.pending_proxy.is_some() && !telegram_running {
         state.watcher.mode = WatcherMode::WaitingForTelegram;
         state.set_current_proxy_status("текущий proxy не работает");
-        state.set_source_status("есть pending proxy, ждём Telegram");
+        state.set_source_status("replacement proxy уже сохранён, ждём Telegram");
         state.save(&paths.state_file)?;
         return Ok("Есть pending proxy, ждём запуска Telegram.".to_string());
     }
@@ -484,7 +484,7 @@ fn watch_cycle(
             Ok(record) => record,
             Err(error) => {
                 state.watcher.mode = WatcherMode::Error;
-                state.set_source_status(error.to_string());
+                state.set_source_status(normalize_source_status(&error.to_string()));
                 if state.current_proxy.is_some() {
                     state.set_current_proxy_status(
                         "текущий proxy не работает, replacement не найден",
@@ -498,10 +498,6 @@ fn watch_cycle(
         };
     state.last_fetch_at = Some(record.captured_at);
     state.push_recent(record.clone(), config.watcher.history_size);
-    state.set_source_status(format!(
-        "найден рабочий proxy: {}",
-        record.proxy.short_label()
-    ));
     state.pending_proxy = Some(record.clone());
     state.watcher.mode = WatcherMode::WaitingForTelegram;
     state.set_current_proxy_status(if state.current_proxy.is_some() {
@@ -510,7 +506,7 @@ fn watch_cycle(
         "текущий proxy не выбран"
     });
     state.set_source_status(format!(
-        "найден replacement proxy, ждём Telegram: {}",
+        "replacement proxy сохранён, ждём Telegram: {}",
         record.proxy.short_label()
     ));
     state.save(&paths.state_file)?;
@@ -639,7 +635,10 @@ fn print_plain_status_v2(
         "Статус backend: {}",
         backend_status_text(state, managed.as_ref())
     );
-    println!("Путь применения: {}", backend_route_text(state, managed.as_ref()));
+    println!(
+        "Путь применения: {}",
+        backend_route_text(state, managed.as_ref())
+    );
     println!("Пул источников: {}", provider_pool_summary(config));
     println!("Включённые источники: {}", enabled_sources_summary(config));
     println!(
@@ -747,6 +746,10 @@ pub(crate) fn current_proxy_status_text(state: &AppState) -> String {
         return state.current_proxy_status.clone();
     }
 
+    if state.backend_restart_required {
+        return "ждёт перезапуска Telegram".to_string();
+    }
+
     if state.pending_proxy.is_some() {
         return "есть pending proxy".to_string();
     }
@@ -764,6 +767,33 @@ pub(crate) fn source_status_text(state: &AppState) -> String {
     }
 
     "нет данных".to_string()
+}
+
+fn normalize_source_status(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.contains("свободных серверов нет") {
+        return "источник пуст: нет свободных proxy".to_string();
+    }
+    if lower.contains("tcp-проверка не прошла") {
+        return "кандидат отклонён локальной проверкой".to_string();
+    }
+    if lower.contains("только недавние proxy") {
+        return "источник не дал новый proxy".to_string();
+    }
+    if lower.contains("не вернул proxy")
+        || lower.contains("не вернули кандидатов")
+        || lower.contains("пустой ответ")
+        || lower.contains("в списке нет")
+        || lower.contains("не удалось выбрать кандидата")
+        || lower.contains("не успел выдать proxy")
+    {
+        return "источник пуст: кандидаты не найдены".to_string();
+    }
+    if lower.contains("не удалось открыть") || lower.contains("вернул ошибку")
+    {
+        return format!("источник недоступен: {raw}");
+    }
+    raw.to_string()
 }
 
 pub(crate) fn backend_status_text(
@@ -787,7 +817,12 @@ pub(crate) fn backend_status_text(
     }
 
     managed
-        .map(|status| format!("тихий backend / {} / {}", status.mode_label, status.selected_label))
+        .map(|status| {
+            format!(
+                "тихий backend / {} / {}",
+                status.mode_label, status.selected_label
+            )
+        })
         .unwrap_or_else(|| "нет данных".to_string())
 }
 
@@ -1042,6 +1077,14 @@ fn apply_proxy_record(
             state.backend_restart_required = false;
             state.set_backend_status("ручной fallback через Telegram UI");
             state.set_backend_route(format!("ручной fallback -> {}", record.proxy.deep_link()));
+        } else if let Some(details) = managed.fallback_error.as_ref() {
+            state.backend_restart_required = state.watcher.telegram_running;
+            state.set_backend_status("ручной fallback недоступен");
+            state.set_backend_route(format!("settingss -> {}", managed.settings_path.display()));
+            let _ = paths.append_log(format!(
+                "manual fallback unavailable for {}: {details}",
+                record.proxy.short_label()
+            ));
         } else {
             state.set_backend_status(format!(
                 "тихий backend / {} / {}",
@@ -1059,7 +1102,9 @@ fn apply_proxy_record(
             state.watcher.mode = WatcherMode::WaitingForTelegram;
             state.watcher.failure_streak = 0;
             state.last_error = None;
-            state.set_current_proxy_status(if state.watcher.telegram_running {
+            state.set_current_proxy_status(if managed.fallback_error.is_some() {
+                "proxy сохранён в settingss, ручной fallback недоступен"
+            } else if state.watcher.telegram_running {
                 "proxy сохранён в settingss, нужен перезапуск Telegram"
             } else {
                 "proxy сохранён в Telegram settings"
@@ -1073,8 +1118,13 @@ fn apply_proxy_record(
             ))?;
             return Ok(if state.watcher.telegram_running {
                 format!(
-                    "{success_prefix}: {} (сохранён в settingss, без live-apply)",
-                    record.proxy.short_label()
+                    "{success_prefix}: {} ({})",
+                    record.proxy.short_label(),
+                    if managed.fallback_error.is_some() {
+                        "сохранён в settingss, ручной fallback недоступен"
+                    } else {
+                        "сохранён в settingss, без live-apply"
+                    }
                 )
             } else {
                 format!(

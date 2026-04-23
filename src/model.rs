@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::APP_VERSION;
 use crate::paths::AppPaths;
+use crate::text::read_text_file;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -241,8 +242,7 @@ impl AppConfig {
             return Ok(Self::default());
         }
 
-        let raw = fs::read_to_string(&paths.config_file)
-            .with_context(|| format!("Не удалось прочитать {}", paths.config_file.display()))?;
+        let raw = read_text_file(&paths.config_file)?;
         let mut config: Self = toml::from_str(&raw)
             .with_context(|| format!("Не удалось разобрать {}", paths.config_file.display()))?;
         config.app_version = APP_VERSION.to_string();
@@ -463,8 +463,7 @@ impl AppState {
             return Ok(Self::default());
         }
 
-        let raw = fs::read_to_string(&paths.state_file)
-            .with_context(|| format!("Не удалось прочитать {}", paths.state_file.display()))?;
+        let raw = read_text_file(&paths.state_file)?;
         let state: Self = serde_json::from_str(&raw)
             .with_context(|| format!("Не удалось разобрать {}", paths.state_file.display()))?;
         Ok(state)
@@ -506,7 +505,7 @@ impl AppState {
         self.watcher.failure_streak = 0;
         self.last_error = None;
         self.backend_restart_required = false;
-        self.current_proxy_status = "работает".to_string();
+        self.current_proxy_status = "активен".to_string();
     }
 
     pub fn mark_failure(&mut self) -> u32 {
@@ -723,5 +722,36 @@ mod tests {
                 .iter()
                 .any(|source| source.name == "Argh94 SOCKS5")
         );
+    }
+
+    #[test]
+    fn config_and_state_load_from_utf8_bom_files() {
+        let root = tempdir().unwrap();
+        let appdata = root.path().join("app");
+        let local = root.path().join("local");
+        fs::create_dir_all(&appdata).unwrap();
+        fs::create_dir_all(&local).unwrap();
+
+        let paths = AppPaths::from_base_dirs(appdata, local);
+        paths.ensure_dirs().unwrap();
+
+        let config_body = toml::to_string_pretty(&AppConfig::default()).unwrap();
+        let mut config_bytes = vec![0xEF, 0xBB, 0xBF];
+        config_bytes.extend_from_slice(config_body.as_bytes());
+        fs::write(&paths.config_file, config_bytes).unwrap();
+
+        let state_body = serde_json::to_string_pretty(&AppState::default()).unwrap();
+        let mut state_bytes = vec![0xEF, 0xBB, 0xBF];
+        state_bytes.extend_from_slice(state_body.as_bytes());
+        fs::write(&paths.state_file, state_bytes).unwrap();
+
+        let loaded_config = AppConfig::load(&paths).unwrap();
+        let loaded_state = AppState::load(&paths).unwrap();
+
+        assert_eq!(
+            loaded_config.telegram.backend_mode,
+            TelegramBackendMode::Hybrid
+        );
+        assert_eq!(loaded_state.watcher.failure_streak, 0);
     }
 }

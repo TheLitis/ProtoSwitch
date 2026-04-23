@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use aes::{Aes256, Block};
 use anyhow::{Context, anyhow};
-use md5::{Digest as Md5Digest, Md5};
+use md5::{Digest, Md5};
 use pbkdf2::pbkdf2_hmac;
-use sha1::{Digest as Sha1Digest, Sha1};
+use sha1::Sha1;
 
 use crate::model::{ProxyKind, TelegramConfig, TelegramProxy};
 
@@ -15,7 +15,6 @@ const SETTINGS_FILE_STEM: &str = "settings";
 const SETTINGS_FILE_NAME: &str = "settingss";
 const LOCAL_ENCRYPT_SALT_SIZE: usize = 32;
 const LOCAL_ENCRYPT_NO_PWD_ITER_COUNT: u32 = 4;
-const LOCAL_ENCRYPT_ITER_COUNT: u32 = 4_000;
 const DBI_CONNECTION_TYPE_OLD_OLD: u32 = 0x0f;
 const DBI_AUTO_START: u32 = 0x06;
 const DBI_START_MINIMIZED: u32 = 0x07;
@@ -71,28 +70,6 @@ impl DesktopProxy {
                 user: proxy.username.clone().unwrap_or_default(),
                 password: proxy.password.clone().unwrap_or_default(),
             },
-        }
-    }
-
-    pub fn to_managed(&self) -> Option<TelegramProxy> {
-        match self.kind {
-            DesktopProxyType::Mtproto => Some(TelegramProxy {
-                kind: ProxyKind::MtProto,
-                server: self.host.clone(),
-                port: self.port,
-                secret: Some(self.password.clone()),
-                username: None,
-                password: None,
-            }),
-            DesktopProxyType::Socks5 => Some(TelegramProxy {
-                kind: ProxyKind::Socks5,
-                server: self.host.clone(),
-                port: self.port,
-                secret: None,
-                username: non_empty(&self.user),
-                password: non_empty(&self.password),
-            }),
-            DesktopProxyType::None | DesktopProxyType::Http => None,
         }
     }
 
@@ -266,7 +243,8 @@ impl DesktopProxySettings {
         })
     }
 
-    pub fn to_proxy_blob(&self) -> Vec<u8> {
+    #[cfg(test)]
+    fn to_proxy_blob(&self) -> Vec<u8> {
         let mut writer = QtWriter::new();
         writer.write_i32(if self.try_ipv6 { 1 } else { 0 });
         writer.write_i32(if self.use_proxy_for_calls { 1 } else { 0 });
@@ -365,12 +343,6 @@ impl TelegramDesktopSettings {
         });
     }
 
-    pub fn clear_legacy_proxy_override(&mut self) {
-        self.blocks.retain(|block| {
-            block.id != DBI_CONNECTION_TYPE_OLD && block.id != DBI_CONNECTION_TYPE_OLD_OLD
-        });
-    }
-
     fn to_file_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let salt = if self.salt.len() == LOCAL_ENCRYPT_SALT_SIZE {
             self.salt.clone()
@@ -417,7 +389,6 @@ pub fn resolve_telegram_data_dir(config: &TelegramConfig) -> anyhow::Result<Path
 }
 
 pub fn detect_telegram_data_dir() -> Option<PathBuf> {
-    let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
     let mut candidates = Vec::new();
 
     #[cfg(windows)]
@@ -434,6 +405,7 @@ pub fn detect_telegram_data_dir() -> Option<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
+        let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
         candidates.push(home.join(".local/share/TelegramDesktop/tdata"));
         candidates.push(home.join(".local/share/Telegram Desktop/tdata"));
         candidates.push(home.join(".TelegramDesktop/tdata"));
@@ -447,6 +419,7 @@ pub fn detect_telegram_data_dir() -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
+        let home = directories::BaseDirs::new()?.home_dir().to_path_buf();
         candidates.push(
             home.join("Library")
                 .join("Application Support")
@@ -472,14 +445,6 @@ pub fn write_proxy_settings_override(
     let tdata_dir = resolve_telegram_data_dir(config)?;
     let mut file = TelegramDesktopSettings::load_from_tdata(&tdata_dir)?;
     file.set_legacy_proxy_override(settings);
-    file.save_to_tdata(&tdata_dir)?;
-    Ok(settings_file_path(&tdata_dir))
-}
-
-pub fn clear_proxy_settings_override(config: &TelegramConfig) -> anyhow::Result<PathBuf> {
-    let tdata_dir = resolve_telegram_data_dir(config)?;
-    let mut file = TelegramDesktopSettings::load_from_tdata(&tdata_dir)?;
-    file.clear_legacy_proxy_override();
     file.save_to_tdata(&tdata_dir)?;
     Ok(settings_file_path(&tdata_dir))
 }
@@ -876,6 +841,7 @@ fn parse_proxy_blob(bytes: &[u8]) -> anyhow::Result<Option<DesktopProxy>> {
     }
 }
 
+#[cfg(test)]
 fn serialize_proxy(proxy: Option<&DesktopProxy>) -> Vec<u8> {
     let mut writer = QtWriter::new();
     let proxy = proxy.cloned().unwrap_or(DesktopProxy {
@@ -1097,14 +1063,6 @@ fn proxy_settings_to_i32(value: DesktopProxyMode) -> i32 {
     }
 }
 
-fn non_empty(value: &str) -> Option<String> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
-}
-
 fn mask_secret(value: &str) -> String {
     if value.chars().count() <= 12 {
         return value.to_string();
@@ -1252,10 +1210,6 @@ impl QtWriter {
 
     fn write_raw(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
-    }
-
-    fn write_u8(&mut self, value: u8) {
-        self.bytes.push(value);
     }
 
     fn write_u16(&mut self, value: u16) {
