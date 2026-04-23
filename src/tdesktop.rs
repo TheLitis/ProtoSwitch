@@ -371,16 +371,21 @@ impl TelegramDesktopSettings {
 pub fn resolve_telegram_data_dir(config: &TelegramConfig) -> anyhow::Result<PathBuf> {
     if let Some(override_path) = config.data_dir.as_deref() {
         let candidate = PathBuf::from(override_path);
-        if candidate.join(SETTINGS_FILE_NAME).exists() {
+        if candidate.join(SETTINGS_FILE_NAME).exists() || candidate.join(SETTINGS_FILE_STEM).exists()
+        {
             return Ok(candidate);
         }
-        if candidate.join("tdata").join(SETTINGS_FILE_NAME).exists() {
+        if candidate.join("tdata").join(SETTINGS_FILE_NAME).exists()
+            || candidate.join("tdata").join(SETTINGS_FILE_STEM).exists()
+        {
             return Ok(candidate.join("tdata"));
         }
         return Err(anyhow!(
-            "В telegram.data_dir не найден {} или tdata/{}",
+            "В telegram.data_dir не найден {} / {} или tdata/{} / tdata/{}",
             SETTINGS_FILE_NAME,
-            SETTINGS_FILE_NAME
+            SETTINGS_FILE_STEM,
+            SETTINGS_FILE_NAME,
+            SETTINGS_FILE_STEM
         ));
     }
 
@@ -474,10 +479,11 @@ pub(crate) fn read_test_proxy_settings(tdata_dir: &Path) -> anyhow::Result<Deskt
 
 fn settings_file_path(tdata_dir: &Path) -> PathBuf {
     let modern = tdata_dir.join(SETTINGS_FILE_NAME);
-    if modern.exists() {
+    let legacy = tdata_dir.join(SETTINGS_FILE_STEM);
+    if modern.exists() || !legacy.exists() {
         modern
     } else {
-        tdata_dir.join(SETTINGS_FILE_STEM)
+        legacy
     }
 }
 
