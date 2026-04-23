@@ -38,7 +38,7 @@ jobs:
           grep -F "## [${{ steps.meta.outputs.tag }}]" CHANGELOG.md > /dev/null
 
   windows:
-    needs: metadata
+    needs: [metadata, windows-e2e]
     runs-on: windows-2025
     env:
       RUSTFLAGS: -Dwarnings
@@ -64,6 +64,18 @@ jobs:
         with:
           name: windows-artifacts
           path: dist/${{ needs.metadata.outputs.version }}/*
+
+  windows-e2e:
+    needs: metadata
+    runs-on: windows-2025
+    env:
+      RUSTFLAGS: -Dwarnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run deterministic watcher e2e
+        shell: pwsh
+        run: cargo test --locked watcher_e2e_
 
   linux:
     needs: metadata
