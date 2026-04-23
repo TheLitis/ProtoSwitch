@@ -25,3 +25,12 @@ pub fn render_ui_preview(
 ) -> anyhow::Result<String> {
     ui::render_preview(width, height, section, sample)
 }
+
+pub fn render_ui_preview_json(
+    width: u16,
+    height: u16,
+    section: &str,
+    sample: bool,
+) -> anyhow::Result<String> {
+    ui::render_preview_json(width, height, section, sample)
+}

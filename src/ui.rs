@@ -14,7 +14,10 @@ use ratatui::backend::{CrosstermBackend, TestBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap,
+};
+use serde::Serialize;
 
 use crate::APP_VERSION;
 use crate::app;
@@ -349,6 +352,36 @@ pub fn render_preview(
     terminal.draw(|frame| render_console(frame, &paths, &snapshot, &console, &actions))?;
 
     Ok(buffer_to_string(terminal.backend().buffer()))
+}
+
+pub fn render_preview_json(
+    width: u16,
+    height: u16,
+    section: &str,
+    sample: bool,
+) -> anyhow::Result<String> {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend)?;
+    let paths = if sample {
+        preview_fixture_paths()
+    } else {
+        AppPaths::resolve()?
+    };
+    let snapshot = if sample {
+        preview_sample_snapshot(paths.clone())
+    } else {
+        UiSnapshot::load(&paths)?
+    };
+    let console = ConsoleState {
+        section: parse_preview_section(section)?,
+        ..ConsoleState::default()
+    };
+    let actions = console_actions(&snapshot);
+
+    terminal.draw(|frame| render_console(frame, &paths, &snapshot, &console, &actions))?;
+
+    let grid = PreviewGrid::from_buffer(terminal.backend().buffer());
+    serde_json::to_string(&grid).context("Не удалось сериализовать color preview")
 }
 
 fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
@@ -818,7 +851,7 @@ fn render_actions(
         .map(|(index, action)| {
             let selected = index == console.focus;
             let style = if selected {
-                selected_style()
+                selected_row_style()
             } else {
                 text_style()
             };
@@ -1179,7 +1212,7 @@ fn render_dashboard_responsive(
 
     let overview_lines = |width: u16| {
         let mut lines = Vec::new();
-        lines.extend(kv_lines("Сейчас", overall_summary.clone(), width));
+        lines.extend(kv_lines("Итог", overall_summary.clone(), width));
         lines.extend(kv_lines("Дальше", next_step.clone(), width));
         lines
     };
@@ -1471,22 +1504,19 @@ fn render_actions_responsive(
 ) {
     let action_items = actions
         .iter()
-        .enumerate()
-        .map(|(index, action)| {
-            let selected = index == console.focus;
-            let style = if selected {
-                selected_style()
-            } else {
-                text_style()
-            };
+        .map(|action| {
             ListItem::new(Line::from(vec![
-                Span::styled(if selected { "> " } else { "  " }, style),
-                Span::styled(action.label(snapshot), style),
+                Span::styled(action.label(snapshot), text_style()),
                 Span::raw("  "),
                 Span::styled(action.shortcut(), muted_style()),
             ]))
         })
         .collect::<Vec<_>>();
+    let mut action_state = ListState::default().with_selected(Some(console.focus));
+    let action_list = List::new(action_items)
+        .block(panel("Команды"))
+        .highlight_style(selected_row_style())
+        .highlight_symbol("› ");
     let detail = if console.inspector_lines.is_empty() {
         action_description_lines(actions[console.focus], snapshot, paths)
     } else {
@@ -1503,7 +1533,7 @@ fn render_actions_responsive(
                     Constraint::Min(6),
                 ])
                 .split(area);
-            frame.render_widget(List::new(action_items).block(panel("Команды")), rows[0]);
+            frame.render_stateful_widget(action_list, rows[0], &mut action_state);
             frame.render_widget(
                 Paragraph::new(detail)
                     .block(panel(&console.inspector_title))
@@ -1517,7 +1547,7 @@ fn render_actions_responsive(
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
                 .split(area);
-            frame.render_widget(List::new(action_items).block(panel("Команды")), columns[0]);
+            frame.render_stateful_widget(action_list, columns[0], &mut action_state);
             let right = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(11), Constraint::Min(8)])
@@ -2181,6 +2211,111 @@ fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
     lines.join("\n")
 }
 
+#[derive(Serialize)]
+struct PreviewGrid {
+    width: u16,
+    height: u16,
+    cells: Vec<PreviewCell>,
+}
+
+#[derive(Serialize)]
+struct PreviewCell {
+    symbol: String,
+    fg: [u8; 3],
+    bg: [u8; 3],
+    bold: bool,
+}
+
+impl PreviewGrid {
+    fn from_buffer(buffer: &ratatui::buffer::Buffer) -> Self {
+        let area = buffer.area;
+        let mut cells = Vec::with_capacity((area.width as usize) * (area.height as usize));
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = &buffer[(x, y)];
+                cells.push(PreviewCell {
+                    symbol: cell.symbol().to_string(),
+                    fg: preview_color_rgb(cell.fg, false),
+                    bg: preview_color_rgb(cell.bg, true),
+                    bold: cell.modifier.contains(Modifier::BOLD),
+                });
+            }
+        }
+        Self {
+            width: area.width,
+            height: area.height,
+            cells,
+        }
+    }
+}
+
+fn preview_color_rgb(color: Color, background: bool) -> [u8; 3] {
+    match color {
+        Color::Reset => {
+            if background {
+                [11, 16, 22]
+            } else {
+                [228, 236, 245]
+            }
+        }
+        Color::Black => [0, 0, 0],
+        Color::Red => [205, 49, 49],
+        Color::Green => [13, 188, 121],
+        Color::Yellow => [229, 229, 16],
+        Color::Blue => [36, 114, 200],
+        Color::Magenta => [188, 63, 188],
+        Color::Cyan => [17, 168, 205],
+        Color::Gray => [204, 204, 204],
+        Color::DarkGray => [118, 118, 118],
+        Color::LightRed => [241, 76, 76],
+        Color::LightGreen => [35, 209, 139],
+        Color::LightYellow => [245, 245, 67],
+        Color::LightBlue => [59, 142, 234],
+        Color::LightMagenta => [214, 112, 214],
+        Color::LightCyan => [41, 184, 219],
+        Color::White => [242, 242, 242],
+        Color::Rgb(r, g, b) => [r, g, b],
+        Color::Indexed(index) => indexed_color_rgb(index),
+    }
+}
+
+fn indexed_color_rgb(index: u8) -> [u8; 3] {
+    const ANSI: [[u8; 3]; 16] = [
+        [0, 0, 0],
+        [205, 49, 49],
+        [13, 188, 121],
+        [229, 229, 16],
+        [36, 114, 200],
+        [188, 63, 188],
+        [17, 168, 205],
+        [229, 229, 229],
+        [102, 102, 102],
+        [241, 76, 76],
+        [35, 209, 139],
+        [245, 245, 67],
+        [59, 142, 234],
+        [214, 112, 214],
+        [41, 184, 219],
+        [255, 255, 255],
+    ];
+
+    if index < 16 {
+        return ANSI[index as usize];
+    }
+
+    if index < 232 {
+        let offset = index - 16;
+        let r = offset / 36;
+        let g = (offset % 36) / 6;
+        let b = offset % 6;
+        let scale = [0, 95, 135, 175, 215, 255];
+        return [scale[r as usize], scale[g as usize], scale[b as usize]];
+    }
+
+    let gray = 8 + (index - 232) * 10;
+    [gray, gray, gray]
+}
+
 fn kv_line(label: &str, value: String, _width: u16) -> Line<'static> {
     let label_width = label.chars().count().clamp(6, 10);
     Line::from(vec![
@@ -2431,6 +2566,13 @@ fn muted_style() -> Style {
 fn selected_style() -> Style {
     Style::default()
         .fg(Color::Rgb(109, 175, 255))
+        .add_modifier(Modifier::BOLD)
+}
+
+fn selected_row_style() -> Style {
+    Style::default()
+        .fg(Color::Rgb(11, 16, 22))
+        .bg(Color::Rgb(109, 175, 255))
         .add_modifier(Modifier::BOLD)
 }
 
