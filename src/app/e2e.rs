@@ -309,31 +309,76 @@ fn watcher_e2e_saves_pending_proxy_when_telegram_is_closed() {
     let after_settings = read_test_proxy_settings(&harness.tdata_dir).unwrap();
 
     assert!(message.is_empty());
-    assert!(matches!(
-        after_state.watcher.mode,
-        WatcherMode::WaitingForTelegram
-    ));
+    assert!(matches!(after_state.watcher.mode, WatcherMode::Watching));
     assert!(!after_state.backend_restart_required);
-    assert_eq!(
-        after_state
-            .pending_proxy
-            .as_ref()
-            .map(|record| &record.proxy),
-        Some(&candidate)
-    );
     assert_eq!(
         after_state
             .current_proxy
             .as_ref()
             .map(|record| &record.proxy),
-        Some(&current_record.proxy)
+        Some(&candidate)
     );
-    assert!(
+    assert!(after_state.pending_proxy.is_none());
+    assert!(after_state.source_status.contains("Найден рабочий proxy"));
+    assert_ne!(before, after_settings);
+    assert_eq!(
+        after_settings
+            .selected
+            .as_ref()
+            .map(|proxy| proxy.port),
+        Some(live_candidate.port)
+    );
+}
+
+#[test]
+fn watcher_e2e_autoselects_first_proxy_without_manual_switch() {
+    let _serial = e2e_lock();
+    let live_candidate = LiveProxyListener::new();
+    let candidate = mtproto_proxy(live_candidate.port, "first-managed-secret");
+    let harness = WatcherHarness::new(HashMap::from([(
+        "/first.txt".to_string(),
+        candidate.deep_link(),
+    )]));
+    let config = harness.config_with_sources(vec![link_list_source(
+        "fixture-first",
+        harness.server.url("/first.txt"),
+    )]);
+    let state = AppState {
+        watcher: WatcherSnapshot {
+            mode: WatcherMode::Watching,
+            ..WatcherSnapshot::default()
+        },
+        ..AppState::default()
+    };
+
+    seed_test_proxy_settings(&harness.tdata_dir, &user_proxy_settings()).unwrap();
+    harness.save_config_and_state(&config, &state);
+
+    let provider = MtProtoProvider::new(config.provider.clone()).unwrap();
+    let _guard = telegram::override_is_running(false);
+    let message = watch_cycle(&harness.paths, &config, &provider, true).unwrap();
+    let after_state = AppState::load(&harness.paths).unwrap();
+    let managed_settings = read_test_proxy_settings(&harness.tdata_dir).unwrap();
+
+    assert!(message.is_empty());
+    assert!(matches!(after_state.watcher.mode, WatcherMode::Watching));
+    assert!(!after_state.backend_restart_required);
+    assert!(after_state.pending_proxy.is_none());
+    assert_eq!(
         after_state
-            .source_status
-            .contains("replacement proxy сохранён")
+            .current_proxy
+            .as_ref()
+            .map(|record| &record.proxy),
+        Some(&candidate)
     );
-    assert_eq!(before, after_settings);
+    assert_eq!(
+        managed_settings
+            .selected
+            .as_ref()
+            .map(|proxy| proxy.port),
+        Some(live_candidate.port)
+    );
+    assert!(managed_settings.proxy_rotation_enabled);
 }
 
 #[test]
@@ -467,11 +512,12 @@ fn watcher_e2e_skips_dead_candidate_and_uses_next_live_source() {
 
     assert_eq!(
         after_state
-            .pending_proxy
+            .current_proxy
             .as_ref()
             .map(|record| &record.proxy),
         Some(&live_proxy)
     );
+    assert!(after_state.pending_proxy.is_none());
     let log_output = fs::read_to_string(&harness.paths.log_file).unwrap();
     assert!(log_output.contains("candidate rejected"));
 }

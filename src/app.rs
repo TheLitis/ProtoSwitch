@@ -385,23 +385,10 @@ fn watch_cycle(
         }
     }
     if state.current_proxy.is_none() {
-        state.watcher.mode = WatcherMode::Idle;
-        state.watcher.failure_streak = 0;
-        state.set_current_proxy_status("ещё нет proxy под управлением");
-        state.set_source_status(if state.pending_proxy.is_some() {
-            "replacement proxy уже сохранён, ждём ручной apply"
-        } else {
-            "авторотация ждёт первого ручного switch"
-        });
-        state.save(&paths.state_file)?;
-        return Ok(if headless {
-            String::new()
-        } else if state.pending_proxy.is_some() {
-            "Watcher не трогает внешний proxy. Есть pending proxy для ручного применения."
-                .to_string()
-        } else {
-            "Watcher ждёт первого ручного switch и не трогает внешний proxy.".to_string()
-        });
+        state.watcher.mode = WatcherMode::Switching;
+        state.watcher.failure_streak = config.watcher.failure_threshold;
+        state.set_current_proxy_status("proxy не выбран, ищем рабочий");
+        state.set_source_status("идёт автоматический поиск proxy");
     }
     let managed_proxy_healthy = state
         .current_proxy
@@ -420,7 +407,7 @@ fn watch_cycle(
         state.save(&paths.state_file)?;
         return Ok("Proxy остаётся рабочим.".to_string());
     }
-    if telegram_running && let Some(record) = state.pending_proxy.clone() {
+    if let Some(record) = state.pending_proxy.clone() {
         match apply_proxy_record(
             paths,
             config,
@@ -455,27 +442,17 @@ fn watch_cycle(
             state.watcher.failure_streak, config.watcher.failure_threshold
         ));
     }
-    if state.pending_proxy.is_some() && !telegram_running {
-        state.watcher.mode = WatcherMode::WaitingForTelegram;
-        state.set_current_proxy_status("текущий proxy не работает");
-        state.set_source_status("replacement proxy уже сохранён, ждём Telegram");
-        state.save(&paths.state_file)?;
-        return Ok("Есть pending proxy, ждём запуска Telegram.".to_string());
-    }
-    if telegram_running {
-        return apply_candidate_with_retries(
-            paths,
-            config,
-            provider,
-            &mut state,
-            "Watcher переключил proxy",
-            false,
-        );
-    }
-    let record =
-        match fetch_validated_candidate(paths, config, provider, &state.recent_proxy_values()) {
-            Ok(record) => record,
-            Err(error) => {
+    match apply_candidate_with_retries(
+        paths,
+        config,
+        provider,
+        &mut state,
+        "Watcher переключил proxy",
+        false,
+    ) {
+        Ok(message) => Ok(if headless { String::new() } else { message }),
+        Err(error) => {
+            if state.last_error.is_none() {
                 state.watcher.mode = WatcherMode::Error;
                 state.set_source_status(normalize_source_status(&error.to_string()));
                 if state.current_proxy.is_some() {
@@ -485,35 +462,11 @@ fn watch_cycle(
                 } else {
                     state.set_current_proxy_status("рабочий proxy не найден");
                 }
+                state.last_error = Some(error.to_string());
                 state.save(&paths.state_file)?;
-                return Err(error);
             }
-        };
-    state.last_fetch_at = Some(record.captured_at);
-    state.push_recent(record.clone(), config.watcher.history_size);
-    state.pending_proxy = Some(record.clone());
-    state.watcher.mode = WatcherMode::WaitingForTelegram;
-    state.set_current_proxy_status(if state.current_proxy.is_some() {
-        "текущий proxy не работает"
-    } else {
-        "текущий proxy не выбран"
-    });
-    state.set_source_status(format!(
-        "replacement proxy сохранён, ждём Telegram: {}",
-        record.proxy.short_label()
-    ));
-    state.save(&paths.state_file)?;
-    paths.append_log(format!(
-        "watcher сохранил отложенный proxy при выключенном Telegram: {}",
-        record.proxy.short_label()
-    ))?;
-    if headless {
-        Ok(String::new())
-    } else {
-        Ok(format!(
-            "Telegram не запущен. Отложенный proxy сохранён: {}",
-            record.proxy.short_label()
-        ))
+            Err(error)
+        }
     }
 }
 
@@ -900,28 +853,56 @@ pub(crate) fn backend_status_text(
             "ждёт следующего запуска Telegram"
         };
         if !state.backend_status.trim().is_empty() {
-            return format!("{} / {}", state.backend_status, waiting);
+            return format!("{} / {}", normalize_backend_status(&state.backend_status), waiting);
         }
         return waiting.to_string();
     }
 
     if !state.backend_status.trim().is_empty() {
-        return state.backend_status.clone();
+        return normalize_backend_status(&state.backend_status);
     }
 
     managed
         .map(|status| {
-            let rotation = if status.rotation_enabled {
-                " / rotation"
-            } else {
-                ""
-            };
-            format!(
-                "managed backend / {}{} / {}",
-                status.mode_label, rotation, status.selected_label
+            managed_backend_summary(
+                &status.mode_label,
+                &status.selected_label,
+                status.rotation_enabled,
             )
         })
         .unwrap_or_else(|| "нет данных".to_string())
+}
+
+fn managed_backend_summary(
+    mode_label: &str,
+    selected_label: &str,
+    rotation_enabled: bool,
+) -> String {
+    match mode_label {
+        "включён" => {
+            let rotation = if rotation_enabled {
+                "авторотация"
+            } else {
+                "один proxy"
+            };
+            format!("managed settings / {rotation} / {selected_label}")
+        }
+        "системный" => "Telegram использует системный proxy".to_string(),
+        "выключен" => "proxy в Telegram выключен".to_string(),
+        _ => format!("managed settings / {mode_label} / {selected_label}"),
+    }
+}
+
+fn normalize_backend_status(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("managed backend / ") {
+        let mut parts = rest.splitn(3, " / ");
+        let mode = parts.next().unwrap_or_default();
+        let selected = parts.next().unwrap_or_default();
+        let selected = parts.next().unwrap_or(selected);
+        return managed_backend_summary(mode, selected, trimmed.contains("rotation"));
+    }
+    trimmed.to_string()
 }
 
 pub(crate) fn backend_route_text(
@@ -1039,9 +1020,10 @@ pub(crate) fn load_status_snapshot(
     state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
     if let Ok(managed) = telegram::managed_settings_status(&config.telegram) {
         if state.backend_status.trim().is_empty() {
-            state.set_backend_status(format!(
-                "managed backend / {} / {}",
-                managed.mode_label, managed.selected_label
+            state.set_backend_status(managed_backend_summary(
+                &managed.mode_label,
+                &managed.selected_label,
+                managed.rotation_enabled,
             ));
         }
         if state.backend_route.trim().is_empty() {
@@ -1192,9 +1174,10 @@ fn apply_proxy_record(
                 record.proxy.short_label()
             ));
         } else {
-            state.set_backend_status(format!(
-                "managed backend / {} / {}",
-                managed.settings_status.mode_label, managed.settings_status.selected_label
+            state.set_backend_status(managed_backend_summary(
+                &managed.settings_status.mode_label,
+                &managed.settings_status.selected_label,
+                managed.settings_status.rotation_enabled,
             ));
             state.set_backend_route(format!("settingss -> {}", managed.settings_path.display()));
         }
@@ -1448,7 +1431,7 @@ pub(crate) fn switch_to_candidate(paths: &AppPaths, dry_run: bool) -> anyhow::Re
         &provider,
         &mut state,
         "Применён proxy",
-        true,
+        false,
     )
 }
 

@@ -1270,7 +1270,11 @@ fn render_dashboard_responsive(
             width,
         ));
         lines.extend(kv_lines("Backend", backend_status.clone(), width));
-        lines.extend(kv_lines("Путь", backend_route.clone(), width));
+        lines.push(kv_line(
+            "Файл",
+            compact_to_width(&friendly_backend_route(&backend_route), width, 12),
+            width,
+        ));
         lines.extend(kv_lines(
             "Рестарт",
             if snapshot.state.backend_restart_required {
@@ -2303,6 +2307,18 @@ fn compact_to_width(value: &str, width: u16, reserve: u16) -> String {
     compact(value, width.saturating_sub(reserve).max(10) as usize)
 }
 
+fn friendly_backend_route(route: &str) -> String {
+    let trimmed = route.trim();
+    let settings = trimmed
+        .strip_prefix("settingss -> ")
+        .or_else(|| trimmed.strip_prefix("settingss: "))
+        .unwrap_or(trimmed);
+    if settings.ends_with("settingss") || settings.contains("\\tdata\\") || settings.contains("/tdata/") {
+        return format!("settingss: {settings}");
+    }
+    trimmed.to_string()
+}
+
 fn compact(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         return value.to_string();
@@ -2767,7 +2783,7 @@ fn preview_sample_snapshot(paths: AppPaths) -> UiSnapshot {
         pending_proxy: Some(pending),
         current_proxy_status: "proxy записан в Telegram settings".to_string(),
         source_status: "источник временно пуст, используем сохранённый managed proxy".to_string(),
-        backend_status: "managed backend / selected proxy / rotation".to_string(),
+        backend_status: "managed settings / авторотация / MTProto demo.local:443".to_string(),
         backend_route:
             "settingss -> C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
                 .to_string(),
@@ -2920,19 +2936,19 @@ impl ConsoleAction {
         match self {
             ConsoleAction::SwitchNow => vec![
                 "Сразу запросить нового кандидата из встроенного пула источников и сохранить его в Telegram.".to_string(),
-                "Если Telegram уже открыт, ProtoSwitch старается не мешать работе и использует тихий managed-flow.".to_string(),
+                "Если Telegram уже открыт, ProtoSwitch работает через managed settings без popup и переключения окон.".to_string(),
             ],
             ConsoleAction::ApplyPending => vec![
                 "Применить уже сохранённый pending proxy без нового fetch.".to_string(),
                 "Подходит, когда replacement найден заранее, а Telegram запущен только сейчас.".to_string(),
             ],
             ConsoleAction::WatchControl => vec![if snapshot.watcher_online {
-                "Перезапустить headless watcher с актуальным конфигом и свежим состоянием.".to_string()
+                "Перезапустить фоновый watcher с актуальным конфигом и свежим состоянием.".to_string()
             } else {
-                "Поднять headless watcher в фоне без перезапуска интерфейса.".to_string()
+                "Поднять watcher в фоне без перезапуска интерфейса.".to_string()
             }],
             ConsoleAction::StopWatcher => {
-                vec!["Остановить только фоновые headless watcher-процессы ProtoSwitch.".to_string()]
+                vec!["Остановить только фоновые watcher-процессы ProtoSwitch.".to_string()]
             }
             ConsoleAction::StopAll => vec![
                 "Остановить все остальные процессы ProtoSwitch и закрыть текущую консоль.".to_string(),
@@ -3296,7 +3312,7 @@ mod tests {
             current_proxy_status: "proxy записан в Telegram settings".to_string(),
             source_status: "источник временно пуст, используем сохранённый managed proxy"
                 .to_string(),
-            backend_status: "managed backend / selected proxy / rotation".to_string(),
+            backend_status: "managed settings / авторотация / MTProto demo.local:443".to_string(),
             backend_route: "settingss -> C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
                 .to_string(),
             backend_restart_required: false,
@@ -3341,7 +3357,7 @@ mod tests {
         assert!(rendered.contains("Proxy"));
         assert!(rendered.contains("Telegram"));
         assert!(rendered.contains("Источники"));
-        assert!(!rendered.contains("Тихий режим"));
+        assert!(!rendered.contains("managed-flow"));
     }
 
     #[test]
