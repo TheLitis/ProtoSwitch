@@ -3,6 +3,7 @@ mod cli;
 mod model;
 mod paths;
 mod provider;
+mod tdesktop;
 mod telegram;
 mod text;
 mod ui;
