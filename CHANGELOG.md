@@ -2,6 +2,29 @@
 
 Все заметные изменения проекта ProtoSwitch будут отражаться в этом файле.
 
+## [v0.2.0-beta.3] - 2026-04-23
+
+Beta-релиз для закрытия watcher e2e-хвоста: ProtoSwitch теперь имеет детерминированный sandbox e2e-набор для managed watcher-flow, отдельный opt-in live Windows smoke для реального Telegram Desktop и release-gate, который не даёт упаковке Windows пройти без зелёного watcher e2e.
+
+### Added
+
+- Добавлен internal test seam для детерминированного состояния `Telegram запущен / не запущен` внутри crate-level e2e.
+- Добавлены sandbox helper-ы для реального roundtrip `tdata/settingss` через текущий `tdesktop` serializer.
+- Добавлен crate-level watcher e2e suite с локальными HTTP/TCP fixture-серверами и проверками `state.json`, `doctor --json`, `status --json` и managed `settingss`.
+- Добавлен `scripts/e2e-windows-live.ps1` для opt-in live smoke на реальном Windows + Telegram Desktop с backup/restore исходного `settingss`.
+
+### Changed
+
+- Watcher e2e теперь покрывает сценарии `healthy current proxy`, `pending when Telegram closed`, `managed apply when Telegram open`, `dead first candidate / live second candidate` и `source empty / no free proxies`.
+- CI release workflow блокирует Windows packaging на зелёном deterministic watcher e2e job.
+- `tdesktop` data-dir override стал терпимее к sandbox путям и legacy `settings`, чтобы e2e мог валидировать реальный бинарный формат без подмены файлового layout.
+- Release guide, quickstart и README обновлены под `v0.2.0-beta.3` и новый e2e-контур.
+
+### Notes
+
+- Критерий успеха для уже открытого Telegram не изменился: watcher по-прежнему считает фоновым успехом только `silent save + next launch`, а не true live-switch.
+- Live Windows smoke остаётся локальным opt-in сценарием и не меняет CI-контракт для Linux/macOS.
+
 ## [v0.2.0-beta.2] - 2026-04-23
 
 Beta-релиз hardening-очереди: Windows-friendly UTF-8 доведён до практического состояния для PowerShell и installer-текстов, managed backend стал строже различать `active / saved / waiting_for_restart / source empty / manual fallback unavailable`, а Linux/macOS portable-ветка получила реальный smoke-слой в CI вместо compile-only отношения.

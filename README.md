@@ -1,6 +1,6 @@
 ﻿# ProtoSwitch
 
-**ProtoSwitch v0.2.0-beta.2** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и тихо пишет новый managed proxy в настройки Telegram без popup и без focus stealing.
+**ProtoSwitch v0.2.0-beta.3** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и тихо пишет новый managed proxy в настройки Telegram без popup и без focus stealing.
 
 ## Что Есть Сейчас
 
@@ -9,6 +9,7 @@
 - managed backend для `tdata/settingss`, чтобы не засорять Telegram случайными нерабочими адресами;
 - manual fallback для явного `switch` и `repair`, если нужен live-сценарий;
 - structured UTF-8 логи без старого `String::from_utf8_lossy`-хаоса;
+- детерминированный watcher e2e-слой внутри репозитория и отдельный opt-in live Windows smoke;
 - Windows installer + portable-артефакты для Windows, Linux и macOS;
 - автозапуск через `Scheduled Task` / `Startup folder` на Windows, XDG autostart на Linux и LaunchAgent на macOS.
 
@@ -50,6 +51,13 @@ flowchart TD
 - `waiting_for_restart` — Telegram открыт, поэтому новый proxy применится после перезапуска клиента.
 - `source empty / no free proxies` — источник сейчас пуст или временно не смог выдать новый proxy.
 - `manual fallback unavailable` — live fallback сейчас не сработал, но managed settings уже записаны и не потеряны.
+
+## Надёжность И E2E
+
+- Детерминированный e2e-набор проверяет watcher path `fetch -> local validate -> pending/managed apply -> status/doctor -> cleanup` без живого Telegram и без интернета.
+- Sandbox e2e использует реальный бинарный roundtrip `tdata/settingss`, а не текстовые моки формата Telegram.
+- Для ручной проверки на живом Windows/Telegram есть `scripts/e2e-windows-live.ps1` с обязательным backup/restore реального `settingss`.
+- Packaging в release CI теперь блокируется на зелёном watcher e2e для Windows.
 
 ## Быстрый Старт
 
@@ -135,4 +143,5 @@ data_dir = ""
 - Linux/macOS уже проходят portable-first smoke в CI, но всё ещё идут без native installer;
 - фоновый watcher для уже открытого Telegram не делает true live-switch, а использует честную схему `silent save + next launch`;
 - live fallback остаётся только для явных ручных действий `switch` и `repair`, и статус честно покажет, если fallback недоступен;
+- live Windows e2e остаётся opt-in локальным сценарием и не запускается в CI на реальном пользовательском Telegram;
 - бесплатные proxy и сами публичные источники по природе нестабильны, поэтому приложение всё ещё остаётся beta, а не stable.

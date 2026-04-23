@@ -2,7 +2,7 @@
 
 Этот файл нужен только для выпуска релизов ProtoSwitch.
 
-## Что Должно Попасть В `v0.2.0-beta.2`
+## Что Должно Попасть В `v0.2.0-beta.3`
 
 - `ProtoSwitch-Setup-x64.exe`
 - `protoswitch-portable-win-x64.zip`
@@ -14,28 +14,31 @@
 ## Локальная Подготовка
 
 1. Проверьте, что версия совпадает в `Cargo.toml`, верхней записи `CHANGELOG.md` и git tag.
-2. Прогоните тесты:
-   `cargo test`
-3. Соберите Windows-артефакты локально:
+2. Прогоните общий набор:
+   `cargo test --locked`
+3. Прогоните детерминированный watcher e2e отдельно:
+   `cargo test --locked watcher_e2e_`
+4. Соберите Windows-артефакты локально:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-distribution.ps1`
-4. Прогоните portable smoke:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-portable.ps1 -Version 0.2.0-beta.2`
-5. Прогоните installer smoke на чистой Windows-сессии:
+5. Прогоните portable smoke:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-portable.ps1 -Version 0.2.0-beta.3`
+6. Прогоните installer smoke на чистой Windows-сессии:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-installer.ps1 -Mode CurrentUser`
-6. Если нужна machine-wide проверка, используйте повышенный PowerShell:
+7. Если нужна machine-wide проверка, используйте повышенный PowerShell:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-installer.ps1 -Mode Both`
-7. Linux/macOS portable smoke теперь идёт через CI-скрипт:
-   `python3 scripts/smoke-unix.py --repo-root <repo> --version 0.2.0-beta.2 --platform linux --arch x64`
+8. Для ручной live-проверки на реальном Telegram Desktop используйте opt-in сценарий:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\e2e-windows-live.ps1 -ConfirmLiveMutation`
+9. Linux/macOS portable smoke идёт через CI-скрипт:
+   `python3 scripts/smoke-unix.py --repo-root <repo> --version 0.2.0-beta.3 --platform linux --arch x64`
 
 ## Основной Путь Публикации
 
-Основной путь теперь такой:
-
 1. Закоммитьте релизные изменения.
-2. Создайте подписанный тег `v0.2.0-beta.2`.
+2. Создайте подписанный тег `v0.2.0-beta.3`.
 3. Запушьте `main` и тег.
 4. GitHub Actions workflow `.github/workflows/release.yml` сам:
    - проверит наличие записи в `CHANGELOG.md`;
+   - прогонит Windows deterministic watcher e2e;
    - соберёт Windows x64, Linux x64/arm64 и macOS x64/arm64;
    - прогонит Windows/Linux/macOS smoke там, где это возможно автоматически;
    - упакует все portable-артефакты;
