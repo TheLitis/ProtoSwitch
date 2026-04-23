@@ -22,6 +22,9 @@ use crate::telegram;
 use crate::ui;
 use crate::{APP_NAME, APP_VERSION};
 
+#[cfg(test)]
+mod e2e;
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DoctorSnapshot {
     pub app_version: String,
@@ -191,11 +194,7 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
     if args.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "config": config,
-                "state": state,
-                "autostart": autostart,
-            }))
+            serde_json::to_string_pretty(&status_snapshot_json_value(&config, &state, &autostart))
             .context("Не удалось сериализовать status")?
         );
         return Ok(());
@@ -207,6 +206,18 @@ fn handle_status(paths: &AppPaths, args: StatusArgs) -> anyhow::Result<()> {
 
     print_plain_status_v2(paths, &config, &state, &autostart);
     Ok(())
+}
+
+pub(crate) fn status_snapshot_json_value(
+    config: &AppConfig,
+    state: &AppState,
+    autostart: &platform::AutostartStatus,
+) -> serde_json::Value {
+    serde_json::json!({
+        "config": config,
+        "state": state,
+        "autostart": autostart,
+    })
 }
 
 fn handle_switch(paths: &AppPaths, args: SwitchArgs) -> anyhow::Result<()> {
