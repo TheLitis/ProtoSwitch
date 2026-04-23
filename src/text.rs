@@ -1,10 +1,12 @@
 use std::fs;
 use std::path::Path;
+#[cfg(windows)]
 use std::process::Output;
 
 use anyhow::Context;
 use encoding_rs::{Encoding, IBM866, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1251};
 
+#[cfg(windows)]
 pub fn decode_output(output: &Output) -> String {
     let stderr = decode_bytes(&output.stderr).trim().to_string();
     if !stderr.is_empty() {

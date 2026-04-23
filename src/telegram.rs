@@ -1,10 +1,13 @@
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::Duration;
 
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
+#[cfg(windows)]
+use anyhow::Context;
 use sysinfo::{ProcessesToUpdate, System};
 
 use crate::model::{MtProtoProxy, ProxyKind, TelegramBackendMode, TelegramConfig};
@@ -12,6 +15,7 @@ use crate::tdesktop::{
     DesktopProxyMode, DesktopProxySettings, detect_telegram_data_dir, load_proxy_settings,
     resolve_telegram_data_dir, write_proxy_settings_override,
 };
+#[cfg(windows)]
 use crate::text::{decode_bytes, decode_output};
 
 #[cfg(windows)]
@@ -20,6 +24,7 @@ use winreg::RegKey;
 use winreg::enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum ManagedProxyStatus {
     Available(String),
     Checking(String),
@@ -312,6 +317,7 @@ fn check_socks5_proxy(proxy: &MtProtoProxy, timeout: Duration) -> bool {
     }
 }
 
+#[cfg(any(windows, test))]
 fn parse_probe_status_line(line: &str) -> anyhow::Result<ManagedProxyStatus> {
     let Some((kind, value)) = line.split_once(':') else {
         return Err(anyhow!("Не удалось разобрать статус Telegram proxy"));

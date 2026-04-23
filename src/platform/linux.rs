@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use serde::Serialize;
 
 use crate::model::AutostartMethod;
