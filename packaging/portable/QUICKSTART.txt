@@ -13,14 +13,14 @@ ProtoSwitch portable
 4. Для ручной смены proxy:
    protoswitch switch
 5. Для фоновой работы:
-   protoswitch watch --headless
+   protoswitch tray
 6. Для автозапуска используйте:
    protoswitch autostart install
 
 Важно
 
 - Фоновая ротация использует managed settings backend и не должна воровать фокус у Telegram.
-- Если Telegram уже открыт, новый proxy может ждать следующего запуска клиента.
+- В режиме tray ProtoSwitch отображается в системной области Windows/Linux или menu bar на macOS.
 - Если источник временно пуст, статус прямо покажет это вместо молчаливой ошибки.
 
 Что входит в архив

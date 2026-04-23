@@ -8,6 +8,7 @@ Beta-релиз для закрытия watcher e2e-хвоста: ProtoSwitch т
 
 ### Added
 
+- Добавлена команда `protoswitch tray` с индикатором в системной области Windows/Linux и menu bar на macOS.
 - Добавлен internal test seam для детерминированного состояния `Telegram запущен / не запущен` внутри crate-level e2e.
 - Добавлены sandbox helper-ы для реального roundtrip `tdata/settingss` через текущий `tdesktop` serializer.
 - Добавлен crate-level watcher e2e suite с локальными HTTP/TCP fixture-серверами и проверками `state.json`, `doctor --json`, `status --json` и managed `settingss`.
@@ -15,6 +16,8 @@ Beta-релиз для закрытия watcher e2e-хвоста: ProtoSwitch т
 
 ### Changed
 
+- Автозапуск теперь стартует `protoswitch tray`, чтобы у пользователя был видимый фоновый индикатор.
+- Managed apply при открытом Telegram больше не переводит состояние в `waiting_for_restart`: ProtoSwitch записывает proxy в `settingss`, включает Telegram proxy rotation и продолжает watcher-цикл.
 - Watcher e2e теперь покрывает сценарии `healthy current proxy`, `pending when Telegram closed`, `managed apply when Telegram open`, `dead first candidate / live second candidate` и `source empty / no free proxies`.
 - CI release workflow блокирует Windows packaging на зелёном deterministic watcher e2e job.
 - `tdesktop` data-dir override стал терпимее к sandbox путям и legacy `settings`, чтобы e2e мог валидировать реальный бинарный формат без подмены файлового layout.
@@ -22,7 +25,7 @@ Beta-релиз для закрытия watcher e2e-хвоста: ProtoSwitch т
 
 ### Notes
 
-- Критерий успеха для уже открытого Telegram не изменился: watcher по-прежнему считает фоновым успехом только `silent save + next launch`, а не true live-switch.
+- Критерий фонового успеха для открытого Telegram теперь шире: managed settings обновлены, rotation включён, `tg://` popup не открывается.
 - Live Windows smoke остаётся локальным opt-in сценарием и не меняет CI-контракт для Linux/macOS.
 
 ## [v0.2.0-beta.2] - 2026-04-23

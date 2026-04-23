@@ -1,11 +1,12 @@
 ﻿# ProtoSwitch
 
-**ProtoSwitch v0.2.0-beta.3** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и тихо пишет новый managed proxy в настройки Telegram без popup и без focus stealing.
+**ProtoSwitch v0.2.0-beta.3** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и записывает managed proxy в настройки Telegram без popup и без focus stealing.
 
 ## Что Есть Сейчас
 
 - watcher для фоновой проверки и ротации proxy;
 - adaptive TUI с режимами `Обзор`, `Команды`, `Источники`, `История`;
+- индикатор в системной области через `protoswitch tray`;
 - managed backend для `tdata/settingss`, чтобы не засорять Telegram случайными нерабочими адресами;
 - manual fallback для явного `switch` и `repair`, если нужен live-сценарий;
 - structured UTF-8 логи без старого `String::from_utf8_lossy`-хаоса;
@@ -35,20 +36,17 @@ flowchart TD
     B -->|fail| D["Взять кандидата"]
     D --> E["Локально проверить"]
     E -->|bad| D
-    E -->|good| F{"Telegram открыт?"}
-    F -->|нет| G["Тихо записать managed proxy"]
-    F -->|да| H["Тихо записать managed proxy<br/>и пометить waiting_for_restart"]
-    G --> I["Proxy применится при следующем запуске Telegram"]
-    H --> I
+    E -->|good| F["Записать managed proxy"]
+    F --> G["Включить proxy rotation"]
+    G --> H["Продолжить наблюдение"]
 ```
 
-Фоновый watcher не должен поднимать Telegram поверх других окон. Если клиент уже открыт, ProtoSwitch сохраняет новый proxy в managed subset и честно показывает, что он ждёт следующего запуска Telegram.
+Фоновый watcher не должен поднимать Telegram поверх других окон. Если клиент уже открыт, ProtoSwitch обновляет managed subset и включает rotation в настройках Telegram, не открывая `tg://`-диалог.
 
 ## Как Читать Статусы
 
 - `active` — текущий managed proxy проходит проверку и остаётся рабочим.
 - `saved to managed settings` — replacement proxy уже сохранён в `settingss`.
-- `waiting_for_restart` — Telegram открыт, поэтому новый proxy применится после перезапуска клиента.
 - `source empty / no free proxies` — источник сейчас пуст или временно не смог выдать новый proxy.
 - `manual fallback unavailable` — live fallback сейчас не сработал, но managed settings уже записаны и не потеряны.
 
@@ -82,7 +80,7 @@ flowchart TD
    `./protoswitch status --plain`
    `./protoswitch doctor`
 4. Для фоновой работы:
-   `./protoswitch watch --headless`
+   `./protoswitch tray`
 
 ## Основные Команды
 
@@ -91,6 +89,7 @@ flowchart TD
 | `protoswitch init` | создаёт или обновляет `config.toml` |
 | `protoswitch status` | показывает текущее состояние proxy, backend и автозапуска |
 | `protoswitch watch` | запускает watcher |
+| `protoswitch tray` | показывает системный индикатор и держит watcher запущенным |
 | `protoswitch switch` | сразу ищет и применяет новый proxy |
 | `protoswitch cleanup` | чистит dead ProtoSwitch-owned proxy из managed subset |
 | `protoswitch doctor` | проводит диагностику окружения |
@@ -112,7 +111,7 @@ data_dir = ""
 
 `backend_mode`:
 
-- `managed` — только тихая запись в `settingss`;
+- `managed` — только запись в `settingss`;
 - `hybrid` — managed path по умолчанию, live fallback только для явных ручных действий;
 - `manual` — без фонового live-apply watcher всё равно остаётся silent-only.
 
@@ -141,7 +140,7 @@ data_dir = ""
 
 - поддерживается только `Telegram Desktop`;
 - Linux/macOS уже проходят portable-first smoke в CI, но всё ещё идут без native installer;
-- фоновый watcher для уже открытого Telegram не делает true live-switch, а использует честную схему `silent save + next launch`;
+- фоновый watcher не открывает `tg://`-диалог и не нажимает кнопки в Telegram; live-поведение опирается на managed settings и Telegram proxy rotation;
 - live fallback остаётся только для явных ручных действий `switch` и `repair`, и статус честно покажет, если fallback недоступен;
 - live Windows e2e остаётся opt-in локальным сценарием и не запускается в CI на реальном пользовательском Telegram;
 - бесплатные proxy и сами публичные источники по природе нестабильны, поэтому приложение всё ещё остаётся beta, а не stable.
