@@ -619,7 +619,7 @@ mod tests {
         paths.ensure_dirs().unwrap();
 
         let legacy = AppConfig {
-            app_version: "0.1.0-beta.8".to_string(),
+            app_version: "0.1.0-beta.11".to_string(),
             provider: ProviderConfig {
                 source_url: "https://mtproto.ru/personal.php".to_string(),
                 sources: vec![

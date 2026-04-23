@@ -5,7 +5,7 @@ fn main() {
         resource.set_icon("assets/windows/protoswitch.ico");
         resource.set("FileDescription", "ProtoSwitch");
         resource.set("ProductName", "ProtoSwitch");
-        resource.set("CompanyName", "The_Litis");
+        resource.set("CompanyName", "TheLitis");
         resource.set("InternalName", "ProtoSwitch");
         resource
             .compile()

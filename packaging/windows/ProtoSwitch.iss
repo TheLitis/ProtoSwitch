@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0-beta.8"
+  #define AppVersion "0.1.0-beta.11"
 #endif
 #ifndef RepoRoot
   #error RepoRoot must be defined.
@@ -18,7 +18,7 @@
 AppId={{D68BA0D1-DBD6-4608-99D8-A516A3725E1A}
 AppName=ProtoSwitch
 AppVersion={#AppVersion}
-AppPublisher=The_Litis
+AppPublisher=TheLitis
 AppPublisherURL=https://github.com/TheLitis/ProtoSwitch
 AppSupportURL=https://github.com/TheLitis/ProtoSwitch
 AppUpdatesURL=https://github.com/TheLitis/ProtoSwitch/releases
@@ -53,6 +53,7 @@ Source: "{#RepoRoot}\packaging\windows\QUICKSTART.txt"; DestDir: "{app}"; Flags:
 
 [Icons]
 Name: "{autoprograms}\ProtoSwitch"; Filename: "{app}\protoswitch.exe"; IconFilename: "{app}\protoswitch.exe"
+Name: "{autoprograms}\Починить ProtoSwitch"; Filename: "{app}\protoswitch.exe"; Parameters: "repair"; IconFilename: "{app}\protoswitch.exe"
 Name: "{autoprograms}\Удалить ProtoSwitch"; Filename: "{uninstallexe}"
 
 [Run]

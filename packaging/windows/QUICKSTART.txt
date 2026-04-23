@@ -1,26 +1,33 @@
-ProtoSwitch v0.1.0-beta.10
+ProtoSwitch v0.1.0-beta.11
 
 Быстрый старт
 
-1. Если используете portable-версию, запустите protoswitch.exe init --non-interactive --no-autostart.
-2. Если ProtoSwitch установлен через installer, первичная инициализация уже выполнена автоматически.
-3. Проверьте окружение командой protoswitch.exe doctor.
-4. Если нужен фоновый режим, включите autostart install или отметьте автозапуск во время установки.
-5. Запуск protoswitch.exe без аргументов открывает terminal-first console с быстрыми клавишами для switch, cleanup, doctor, watcher и settings.
-6. Для постоянного мониторинга используйте protoswitch.exe watch.
-7. Для ручной смены proxy используйте protoswitch.exe switch.
+1. Если это installer-версия, первичная инициализация уже выполнена.
+2. Если это portable-версия, запустите:
+   protoswitch.exe init --non-interactive --no-autostart
+3. Проверьте состояние:
+   protoswitch.exe doctor
+4. Для фоновой работы включите автозапуск:
+   protoswitch.exe autostart install
+5. Для ручной смены proxy:
+   protoswitch.exe switch
+6. Запуск protoswitch.exe без аргументов открывает консоль управления.
 
-Что ставится
+Что установлено
 
 - protoswitch.exe
 - README.md
 - CHANGELOG.md
-- этот QUICKSTART.txt
+- QUICKSTART.txt
+
+Сервисные пункты в меню Пуск
+
+- ProtoSwitch
+- Починить ProtoSwitch
+- Удалить ProtoSwitch
 
 Что не удаляется автоматически при uninstall
 
 - %APPDATA%\ProtoSwitch\config.toml
 - %LOCALAPPDATA%\ProtoSwitch\state.json
 - %LOCALAPPDATA%\ProtoSwitch\logs\watch.log
-
-Installer при uninstall сам снимает configured autostart, если он был создан этим дистрибутивом.
