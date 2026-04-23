@@ -125,7 +125,10 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 session.terminal.clear()?;
                 console.force_refresh = true;
                 console.clear_inspector();
-                console.set_result("Refresh", vec!["Снимок перечитан и экран обновлён.".to_string()]);
+                console.set_result(
+                    "Refresh",
+                    vec!["Снимок перечитан и экран обновлён.".to_string()],
+                );
                 continue;
             }
             _ => {}
@@ -410,10 +413,26 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
     );
 
     let summary = vec![
-        kv_line("Проверка", format!("{} сек", draft.check_interval_secs), info_rows[1].width),
-        kv_line("TCP timeout", format!("{} сек", draft.connect_timeout_secs), info_rows[1].width),
-        kv_line("Порог сбоев", draft.failure_threshold.to_string(), info_rows[1].width),
-        kv_line("История proxy", draft.history_size.to_string(), info_rows[1].width),
+        kv_line(
+            "Проверка",
+            format!("{} сек", draft.check_interval_secs),
+            info_rows[1].width,
+        ),
+        kv_line(
+            "TCP timeout",
+            format!("{} сек", draft.connect_timeout_secs),
+            info_rows[1].width,
+        ),
+        kv_line(
+            "Порог сбоев",
+            draft.failure_threshold.to_string(),
+            info_rows[1].width,
+        ),
+        kv_line(
+            "История proxy",
+            draft.history_size.to_string(),
+            info_rows[1].width,
+        ),
         kv_line(
             "Автозапуск",
             if draft.autostart_enabled {
@@ -595,7 +614,11 @@ fn render_dashboard(
         Line::from(vec![
             Span::styled("Status   ", muted_style()),
             Span::styled(
-                compact_to_width(&app::current_proxy_status_text(&snapshot.state), route_width, 14),
+                compact_to_width(
+                    &app::current_proxy_status_text(&snapshot.state),
+                    route_width,
+                    14,
+                ),
                 semantic_style(&app::current_proxy_status_text(&snapshot.state)),
             ),
         ]),
@@ -765,7 +788,11 @@ fn render_dashboard(
         "Готовность",
         ready_count as f64 / 3.0,
         &format!("{ready_count}/3 ready"),
-        &compact_to_width(&app::enabled_sources_summary(&snapshot.config), middle[2].width, 10),
+        &compact_to_width(
+            &app::enabled_sources_summary(&snapshot.config),
+            middle[2].width,
+            10,
+        ),
     );
 
     frame.render_widget(
@@ -891,7 +918,8 @@ fn render_providers(
         .split(rows[1]);
 
     frame.render_widget(
-        List::new(provider_source_items(snapshot, bottom[0].width)).block(panel("Встроенные ленты")),
+        List::new(provider_source_items(snapshot, bottom[0].width))
+            .block(panel("Встроенные ленты")),
         bottom[0],
     );
 
@@ -987,9 +1015,21 @@ fn render_history(
                 .unwrap_or_else(|| "нет".to_string()),
             right[0].width,
         ),
-        kv_line("Config", snapshot.paths.config_file.display().to_string(), right[0].width),
-        kv_line("State", snapshot.paths.state_file.display().to_string(), right[0].width),
-        kv_line("Log", snapshot.paths.log_file.display().to_string(), right[0].width),
+        kv_line(
+            "Config",
+            snapshot.paths.config_file.display().to_string(),
+            right[0].width,
+        ),
+        kv_line(
+            "State",
+            snapshot.paths.state_file.display().to_string(),
+            right[0].width,
+        ),
+        kv_line(
+            "Log",
+            snapshot.paths.log_file.display().to_string(),
+            right[0].width,
+        ),
     ];
     frame.render_widget(
         Paragraph::new(detail)
@@ -1300,9 +1340,7 @@ fn find_action(actions: &[ConsoleAction], needle: ConsoleAction) -> Option<Conso
 
 fn kv_line(label: &str, value: String, width: u16) -> Line<'static> {
     let label_width = 14usize.min(label.chars().count().max(8) + 1);
-    let value_width = width
-        .saturating_sub(label_width as u16 + 4)
-        .max(10) as usize;
+    let value_width = width.saturating_sub(label_width as u16 + 4).max(10) as usize;
     Line::from(vec![
         Span::styled(format!("{label:<label_width$}"), muted_style()),
         Span::styled(compact(&value, value_width), text_style()),
@@ -1896,7 +1934,8 @@ impl ConsoleState {
         ];
         self.push_activity("doctor: диагностика запущена".to_string());
         thread::spawn(move || {
-            let _ = sender.send(app::doctor_snapshot(&job_paths).map_err(|error| error.to_string()));
+            let _ =
+                sender.send(app::doctor_snapshot(&job_paths).map_err(|error| error.to_string()));
         });
     }
 

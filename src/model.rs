@@ -427,6 +427,8 @@ pub struct AppState {
     pub last_apply_at: Option<DateTime<Utc>>,
     pub current_proxy_status: String,
     pub source_status: String,
+    pub backend_status: String,
+    pub backend_route: String,
     pub watcher: WatcherSnapshot,
     pub recent_proxies: VecDeque<ProxyRecord>,
     pub last_error: Option<String>,
@@ -494,6 +496,14 @@ impl AppState {
 
     pub fn set_source_status(&mut self, status: impl Into<String>) {
         self.source_status = status.into();
+    }
+
+    pub fn set_backend_status(&mut self, status: impl Into<String>) {
+        self.backend_status = status.into();
+    }
+
+    pub fn set_backend_route(&mut self, status: impl Into<String>) {
+        self.backend_route = status.into();
     }
 }
 

@@ -30,7 +30,12 @@ pub(crate) struct DoctorSnapshot {
     pub log_exists: bool,
     pub tg_protocol_handler: Option<String>,
     pub telegram_executable: Option<String>,
+    pub telegram_data_dir: Option<String>,
     pub telegram_running: bool,
+    pub backend_mode: String,
+    pub managed_proxy_mode: Option<String>,
+    pub managed_selected_proxy: Option<String>,
+    pub managed_proxy_count: Option<usize>,
     pub autostart: windows::AutostartStatus,
     pub enabled_sources: Vec<String>,
     pub provider_probe: Result<String, String>,
@@ -123,6 +128,17 @@ fn handle_init(paths: &AppPaths, args: InitArgs) -> anyhow::Result<()> {
             .executable_path
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "не найден".to_string())
+    );
+    println!(
+        "Telegram data dir: {}",
+        telegram_info
+            .data_dir
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "не найден".to_string())
+    );
+    println!(
+        "Telegram backend: {}",
+        telegram_backend_mode_label(&config.telegram.backend_mode)
     );
     println!(
         "Автозапуск: {}",
@@ -233,7 +249,30 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
         "Telegram Desktop: {}",
         report.telegram_executable.as_deref().unwrap_or("не найден")
     );
+    println!(
+        "Telegram data dir: {}",
+        report.telegram_data_dir.as_deref().unwrap_or("не найден")
+    );
     println!("Telegram запущен: {}", yes_no(report.telegram_running));
+    println!("Telegram backend: {}", report.backend_mode);
+    println!(
+        "Managed proxy mode: {}",
+        report.managed_proxy_mode.as_deref().unwrap_or("нет данных")
+    );
+    println!(
+        "Managed selected proxy: {}",
+        report
+            .managed_selected_proxy
+            .as_deref()
+            .unwrap_or("нет данных")
+    );
+    println!(
+        "Managed proxy count: {}",
+        report
+            .managed_proxy_count
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "нет данных".to_string())
+    );
     println!(
         "Автозапуск: {}",
         if report.autostart.installed {
@@ -335,7 +374,8 @@ fn watch_cycle(
     if managed_proxy_healthy {
         if state.pending_proxy.is_some() {
             state.pending_proxy = None;
-            let _ = paths.append_log("cleared stale pending proxy because current proxy is healthy");
+            let _ =
+                paths.append_log("cleared stale pending proxy because current proxy is healthy");
         }
         state.watcher.mode = WatcherMode::Watching;
         state.mark_healthy();
@@ -352,6 +392,7 @@ fn watch_cycle(
                 record,
                 "Использован сохранённый pending proxy".to_string(),
                 "Pending proxy применён",
+                false,
             ) {
                 Ok(message) => return Ok(message),
                 Err(error) => {
@@ -393,6 +434,7 @@ fn watch_cycle(
             provider,
             &mut state,
             "Watcher переключил proxy",
+            false,
         );
     }
     let record =
@@ -546,9 +588,18 @@ fn print_plain_status_v2(
     state: &AppState,
     autostart: &windows::AutostartStatus,
 ) {
+    let managed = telegram::managed_settings_status(&config.telegram).ok();
     println!("ProtoSwitch {}", APP_VERSION);
     println!("Статус proxy: {}", current_proxy_status_text(state));
     println!("Статус источника: {}", source_status_text(state));
+    println!(
+        "Статус backend: {}",
+        backend_status_text(state, managed.as_ref())
+    );
+    println!(
+        "Backend route: {}",
+        backend_route_text(state, managed.as_ref())
+    );
     println!("Пул источников: {}", provider_pool_summary(config));
     println!("Включённые источники: {}", enabled_sources_summary(config));
     println!(
@@ -571,6 +622,10 @@ fn print_plain_status_v2(
     println!(
         "Telegram запущен: {}",
         yes_no(state.watcher.telegram_running)
+    );
+    println!(
+        "Telegram backend mode: {}",
+        telegram_backend_mode_label(&config.telegram.backend_mode)
     );
     if let Some(record) = &state.current_proxy {
         println!("Последний успешный источник: {}", record.source);
@@ -671,6 +726,32 @@ pub(crate) fn source_status_text(state: &AppState) -> String {
     "нет данных".to_string()
 }
 
+fn backend_status_text(
+    state: &AppState,
+    managed: Option<&telegram::ManagedSettingsStatus>,
+) -> String {
+    if !state.backend_status.trim().is_empty() {
+        return state.backend_status.clone();
+    }
+
+    managed
+        .map(|status| format!("managed {} / {}", status.mode_label, status.selected_label))
+        .unwrap_or_else(|| "нет данных".to_string())
+}
+
+fn backend_route_text(
+    state: &AppState,
+    managed: Option<&telegram::ManagedSettingsStatus>,
+) -> String {
+    if !state.backend_route.trim().is_empty() {
+        return state.backend_route.clone();
+    }
+
+    managed
+        .map(|status| status.data_dir.join("settingss").display().to_string())
+        .unwrap_or_else(|| "нет данных".to_string())
+}
+
 fn dead_managed_proxies(state: &AppState, timeout_secs: u64) -> Vec<MtProtoProxy> {
     let mut values = Vec::new();
 
@@ -701,29 +782,12 @@ fn cleanup_dead_proxies_in_state(
     config: &AppConfig,
     state: &mut AppState,
 ) -> anyhow::Result<usize> {
-    let mut dead = dead_managed_proxies(state, config.watcher.connect_timeout_secs);
-    if config.watcher.auto_cleanup_dead_proxies && state.watcher.telegram_running {
-        match telegram::detect_unavailable_proxies(
-            &state.recent_proxy_values(),
-            config.watcher.connect_timeout_secs,
-        ) {
-            Ok(unavailable) => {
-                for proxy in unavailable {
-                    if !dead.contains(&proxy) {
-                        dead.push(proxy);
-                    }
-                }
-            }
-            Err(error) => {
-                let _ = paths.append_log(format!("telegram status probe skipped: {error}"));
-            }
-        }
-    }
+    let dead = dead_managed_proxies(state, config.watcher.connect_timeout_secs);
     if dead.is_empty() {
         return Ok(0);
     }
 
-    let removed = telegram::remove_proxies(&dead)?;
+    let removed = telegram::cleanup_managed_proxies(&config.telegram, &dead)?;
     if removed == 0 {
         return Ok(0);
     }
@@ -750,6 +814,7 @@ fn cleanup_dead_proxies_in_state(
     }
 
     state.set_source_status(format!("очистка Telegram: удалено {removed} proxy"));
+    state.set_backend_status(format!("managed cleanup удалил {removed} proxy"));
     paths.append_log(format!("telegram cleanup removed {removed} dead proxies"))?;
     Ok(removed)
 }
@@ -782,6 +847,17 @@ pub(crate) fn load_status_snapshot(
     let config = AppConfig::load(paths)?;
     let mut state = AppState::load(paths)?;
     state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
+    if let Ok(managed) = telegram::managed_settings_status(&config.telegram) {
+        if state.backend_status.trim().is_empty() {
+            state.set_backend_status(format!(
+                "managed {} / {}",
+                managed.mode_label, managed.selected_label
+            ));
+        }
+        if state.backend_route.trim().is_empty() {
+            state.set_backend_route(managed.data_dir.join("settingss").display().to_string());
+        }
+    }
     let autostart = windows::query_autostart();
     Ok((config, state, autostart))
 }
@@ -833,13 +909,15 @@ fn store_apply_failure(
     error_message: String,
     log_message: String,
 ) -> anyhow::Result<()> {
-    let _ = telegram::remove_proxies(std::slice::from_ref(&record.proxy));
+    let _ =
+        telegram::cleanup_managed_proxies(&config.telegram, std::slice::from_ref(&record.proxy));
     state.pending_proxy = None;
     state.watcher.mode = WatcherMode::Error;
     state.watcher.failure_streak = config.watcher.failure_threshold;
     state.last_error = Some(error_message);
     state.set_current_proxy_status(current_status);
     state.set_source_status(source_status);
+    state.set_backend_status("managed apply завершился ошибкой");
     state.push_recent(record.clone(), config.watcher.history_size);
     state.save(&paths.state_file)?;
     paths.append_log(log_message)?;
@@ -853,9 +931,91 @@ fn apply_proxy_record(
     record: ProxyRecord,
     source_status: String,
     success_prefix: &str,
+    allow_fallback: bool,
 ) -> anyhow::Result<String> {
     state.push_recent(record.clone(), config.watcher.history_size);
-    if let Err(error) =
+    let managed_owned = state.recent_proxy_values();
+
+    if !matches!(
+        config.telegram.backend_mode,
+        crate::model::TelegramBackendMode::Manual
+    ) {
+        let managed = match telegram::apply_managed_proxy(
+            &config.telegram,
+            &record.proxy,
+            &managed_owned,
+            config.watcher.auto_cleanup_dead_proxies,
+            allow_fallback,
+            config.watcher.connect_timeout_secs,
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                let details = error.to_string();
+                store_apply_failure(
+                    paths,
+                    config,
+                    state,
+                    &record,
+                    format!("Managed backend не смог записать proxy: {details}"),
+                    format!(
+                        "Источник дал кандидата {}, но managed backend завершился ошибкой: {details}",
+                        record.proxy.short_label()
+                    ),
+                    format!(
+                        "Managed backend не смог записать proxy: {}",
+                        record.proxy.short_label()
+                    ),
+                    format!(
+                        "managed backend rejected proxy {} with error {details}",
+                        record.proxy.short_label()
+                    ),
+                )?;
+                return Err(anyhow::anyhow!(
+                    "Managed backend не смог записать proxy: {}",
+                    record.proxy.short_label()
+                ));
+            }
+        };
+
+        state.set_backend_status(format!(
+            "managed {} / {}",
+            managed.settings_status.mode_label, managed.settings_status.selected_label
+        ));
+        state.set_backend_route(managed.settings_path.display().to_string());
+
+        if !managed.immediate {
+            state.current_proxy = Some(record.clone());
+            state.pending_proxy = None;
+            state.last_fetch_at.get_or_insert(record.captured_at);
+            state.last_apply_at = Some(Utc::now());
+            state.watcher.mode = WatcherMode::WaitingForTelegram;
+            state.watcher.failure_streak = 0;
+            state.last_error = None;
+            state.set_current_proxy_status(if state.watcher.telegram_running {
+                "managed override сохранён, нужен перезапуск Telegram"
+            } else {
+                "proxy сохранён в Telegram settings"
+            });
+            state.set_source_status(source_status);
+            state.save(&paths.state_file)?;
+            paths.append_log(format!(
+                "managed proxy override saved {} at {}",
+                record.proxy.short_label(),
+                managed.settings_path.display()
+            ))?;
+            return Ok(if state.watcher.telegram_running {
+                format!(
+                    "{success_prefix}: {} (сохранён в settingss, live apply не выполнялся)",
+                    record.proxy.short_label()
+                )
+            } else {
+                format!(
+                    "{success_prefix}: {} (применится при следующем запуске Telegram)",
+                    record.proxy.short_label()
+                )
+            });
+        }
+    } else if let Err(error) =
         telegram::open_proxy_link(&record.proxy, config.watcher.connect_timeout_secs)
     {
         let details = error.to_string();
@@ -882,7 +1042,11 @@ fn apply_proxy_record(
             "Telegram не подтвердил добавление proxy: {}",
             record.proxy.short_label()
         ));
+    } else {
+        state.set_backend_status("manual tg://proxy apply");
+        state.set_backend_route(record.proxy.deep_link());
     }
+
     let telegram_status =
         telegram::settle_proxy_status(&record.proxy, config.watcher.connect_timeout_secs)?;
     match telegram_status {
@@ -922,6 +1086,9 @@ fn apply_proxy_record(
             state.last_error = None;
             state.set_current_proxy_status(format!("подключён, Telegram: {details}"));
             state.set_source_status(source_status);
+            if state.backend_status.trim().is_empty() {
+                state.set_backend_status("live apply через Telegram UI");
+            }
             try_cleanup_dead_proxies(paths, config, state);
             state.save(&paths.state_file)?;
             paths.append_log(format!(
@@ -987,6 +1154,7 @@ fn apply_candidate_with_retries(
     provider: &MtProtoProvider,
     state: &mut AppState,
     success_prefix: &str,
+    allow_fallback: bool,
 ) -> anyhow::Result<String> {
     let mut rejected = state.recent_proxy_values();
     let attempts = config.watcher.history_size.max(3).min(6);
@@ -1003,6 +1171,7 @@ fn apply_candidate_with_retries(
             record.clone(),
             format!("Найден рабочий proxy: {}", record.proxy.short_label()),
             success_prefix,
+            allow_fallback,
         ) {
             Ok(message) => return Ok(message),
             Err(error) => {
@@ -1032,7 +1201,14 @@ pub(crate) fn switch_to_candidate(paths: &AppPaths, dry_run: bool) -> anyhow::Re
     if dry_run {
         return Ok(format!("Новый proxy: {}", record.proxy.deep_link()));
     }
-    apply_candidate_with_retries(paths, &config, &provider, &mut state, "Применён proxy")
+    apply_candidate_with_retries(
+        paths,
+        &config,
+        &provider,
+        &mut state,
+        "Применён proxy",
+        true,
+    )
 }
 
 pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
@@ -1051,6 +1227,7 @@ pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
         record,
         "Использован сохранённый pending proxy".to_string(),
         "Pending proxy применён",
+        true,
     )
 }
 
@@ -1062,6 +1239,7 @@ pub(crate) fn doctor_snapshot_v2(paths: &AppPaths) -> anyhow::Result<DoctorSnaps
     let config = AppConfig::load(paths)?;
     let provider = MtProtoProvider::new(config.provider.clone())?;
     let installation = telegram::detect_installation()?;
+    let managed = telegram::managed_settings_status(&config.telegram).ok();
     let autostart = windows::query_autostart();
     let provider_probe =
         fetch_validated_candidate(paths, &config, &provider, &[] as &[MtProtoProxy])
@@ -1077,7 +1255,12 @@ pub(crate) fn doctor_snapshot_v2(paths: &AppPaths) -> anyhow::Result<DoctorSnaps
         telegram_executable: installation
             .executable_path
             .map(|path| path.display().to_string()),
+        telegram_data_dir: installation.data_dir.map(|path| path.display().to_string()),
         telegram_running: telegram::is_running().unwrap_or(false),
+        backend_mode: telegram_backend_mode_label(&config.telegram.backend_mode).to_string(),
+        managed_proxy_mode: managed.as_ref().map(|status| status.mode_label.clone()),
+        managed_selected_proxy: managed.as_ref().map(|status| status.selected_label.clone()),
+        managed_proxy_count: managed.as_ref().map(|status| status.proxy_count),
         autostart,
         enabled_sources: config
             .provider
@@ -1357,6 +1540,14 @@ fn autostart_method_label(method: &AutostartMethod) -> &'static str {
     match method {
         AutostartMethod::ScheduledTask => "scheduled_task",
         AutostartMethod::StartupFolder => "startup_folder",
+    }
+}
+
+fn telegram_backend_mode_label(mode: &crate::model::TelegramBackendMode) -> &'static str {
+    match mode {
+        crate::model::TelegramBackendMode::Managed => "managed",
+        crate::model::TelegramBackendMode::Hybrid => "hybrid",
+        crate::model::TelegramBackendMode::Manual => "manual",
     }
 }
 

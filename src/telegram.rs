@@ -7,7 +7,11 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use sysinfo::{ProcessesToUpdate, System};
 
-use crate::model::{MtProtoProxy, ProxyKind};
+use crate::model::{MtProtoProxy, ProxyKind, TelegramBackendMode, TelegramConfig};
+use crate::tdesktop::{
+    DesktopProxyMode, DesktopProxySettings, detect_telegram_data_dir, load_proxy_settings,
+    resolve_telegram_data_dir, write_proxy_settings_override,
+};
 use crate::text::{decode_bytes, decode_output};
 
 #[cfg(windows)]
@@ -22,6 +26,22 @@ pub enum ManagedProxyStatus {
     Unavailable(String),
     Unknown(String),
     Missing,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagedSettingsStatus {
+    pub data_dir: PathBuf,
+    pub selected_label: String,
+    pub mode_label: String,
+    pub proxy_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagedApplyResult {
+    pub settings_path: PathBuf,
+    pub settings_status: ManagedSettingsStatus,
+    pub immediate: bool,
+    pub used_fallback: bool,
 }
 
 pub fn is_running() -> anyhow::Result<bool> {
@@ -181,7 +201,101 @@ pub fn detect_installation() -> anyhow::Result<TelegramInstallation> {
     Ok(TelegramInstallation {
         protocol_handler: tg_protocol_command(),
         executable_path: find_telegram_executable(),
+        data_dir: detect_telegram_data_dir(),
     })
+}
+
+pub fn managed_settings_status(config: &TelegramConfig) -> anyhow::Result<ManagedSettingsStatus> {
+    let data_dir = resolve_telegram_data_dir(config)?;
+    let settings = load_proxy_settings(config)?;
+
+    Ok(ManagedSettingsStatus {
+        data_dir,
+        selected_label: settings.selected_label(),
+        mode_label: managed_mode_label(settings.mode).to_string(),
+        proxy_count: settings.list.len(),
+    })
+}
+
+pub fn apply_managed_proxy(
+    config: &TelegramConfig,
+    proxy: &MtProtoProxy,
+    owned: &[MtProtoProxy],
+    cleanup_owned: bool,
+    allow_ui_fallback: bool,
+    timeout_secs: u64,
+) -> anyhow::Result<ManagedApplyResult> {
+    let mut settings =
+        load_proxy_settings(config).unwrap_or_else(|_| DesktopProxySettings::default());
+    settings.upsert_managed_proxy(proxy, owned, cleanup_owned);
+    let settings_path = write_proxy_settings_override(config, &settings)?;
+    let settings_status = ManagedSettingsStatus {
+        data_dir: settings_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| settings_path.clone()),
+        selected_label: settings.selected_label(),
+        mode_label: managed_mode_label(settings.mode).to_string(),
+        proxy_count: settings.list.len(),
+    };
+
+    if matches!(config.backend_mode, TelegramBackendMode::Managed) || !is_running().unwrap_or(false)
+    {
+        return Ok(ManagedApplyResult {
+            settings_path,
+            settings_status,
+            immediate: false,
+            used_fallback: false,
+        });
+    }
+
+    if allow_ui_fallback {
+        open_proxy_link(proxy, timeout_secs)?;
+        return Ok(ManagedApplyResult {
+            settings_path,
+            settings_status,
+            immediate: true,
+            used_fallback: true,
+        });
+    }
+
+    Ok(ManagedApplyResult {
+        settings_path,
+        settings_status,
+        immediate: false,
+        used_fallback: false,
+    })
+}
+
+pub fn cleanup_managed_proxies(
+    config: &TelegramConfig,
+    owned: &[MtProtoProxy],
+) -> anyhow::Result<usize> {
+    if owned.is_empty() {
+        return Ok(0);
+    }
+
+    let mut settings = load_proxy_settings(config)?;
+    let removed = settings.cleanup_owned(owned);
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    let _ = write_proxy_settings_override(config, &settings)?;
+    Ok(removed)
+}
+
+pub fn selected_matches_managed_proxy(
+    config: &TelegramConfig,
+    proxy: &MtProtoProxy,
+) -> anyhow::Result<bool> {
+    let settings = load_proxy_settings(config)?;
+    Ok(settings
+        .selected
+        .as_ref()
+        .and_then(|selected| selected.to_managed())
+        .map(|selected| selected == *proxy)
+        .unwrap_or(false))
 }
 
 fn resolve_socket_addr(server: &str, port: u16) -> Option<SocketAddr> {
@@ -1683,11 +1797,19 @@ fn ps_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-#[cfg(windows)]
 #[derive(Debug, Clone)]
 pub struct TelegramInstallation {
     pub protocol_handler: Option<String>,
     pub executable_path: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
+}
+
+fn managed_mode_label(mode: DesktopProxyMode) -> &'static str {
+    match mode {
+        DesktopProxyMode::System => "system",
+        DesktopProxyMode::Enabled => "enabled",
+        DesktopProxyMode::Disabled => "disabled",
+    }
 }
 
 #[cfg(test)]
