@@ -19,7 +19,7 @@ pub struct AutostartStatus {
 
 #[cfg(windows)]
 pub fn install_autostart(executable: &Path) -> anyhow::Result<AutostartMethod> {
-    let command = format!("\"{}\" watch --headless", executable.display());
+    let command = format!("\"{}\" tray", executable.display());
 
     match create_scheduled_task(&command) {
         Ok(output) if output.status.success() => {
@@ -269,7 +269,7 @@ fn startup_shortcut_script(executable: &Path, shortcut_path: &Path) -> String {
 #[cfg(windows)]
 fn startup_launcher_arguments(executable: &str) -> String {
     format!(
-        "-NoProfile -WindowStyle Hidden -Command \"Start-Process -WindowStyle Hidden -FilePath '{}' -ArgumentList 'watch --headless'\"",
+        "-NoProfile -WindowStyle Hidden -Command \"Start-Process -WindowStyle Hidden -FilePath '{}' -ArgumentList 'tray'\"",
         executable.replace('\'', "''")
     )
 }
@@ -304,7 +304,7 @@ mod tests {
     fn startup_shortcut_uses_hidden_powershell_launch() {
         let args = startup_launcher_arguments(r"C:\Tools\protoswitch.exe");
         assert!(args.contains("Start-Process -WindowStyle Hidden"));
-        assert!(args.contains("watch --headless"));
+        assert!(args.contains("'tray'"));
     }
 
     #[test]

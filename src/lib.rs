@@ -7,6 +7,7 @@ mod provider;
 mod tdesktop;
 mod telegram;
 mod text;
+mod tray;
 mod ui;
 
 pub const APP_NAME: &str = "ProtoSwitch";

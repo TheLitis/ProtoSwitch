@@ -69,7 +69,7 @@ fn desktop_entry_path() -> anyhow::Result<PathBuf> {
 
 fn desktop_entry(executable: &Path) -> String {
     format!(
-        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=ProtoSwitch\nExec={} watch --headless\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=ProtoSwitch\nExec={} tray\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
         desktop_exec_argument(&executable.display().to_string())
     )
 }
@@ -93,9 +93,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_entry_contains_headless_watcher_exec() {
+    fn desktop_entry_contains_tray_exec() {
         let body = desktop_entry(Path::new("/opt/Proto Switch/protoswitch"));
-        assert!(body.contains("watch --headless"));
+        assert!(body.contains("tray"));
         assert!(body.contains("Exec=/opt/Proto\\ Switch/protoswitch"));
     }
 }

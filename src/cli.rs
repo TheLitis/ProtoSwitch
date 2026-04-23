@@ -21,6 +21,7 @@ pub enum Commands {
     Doctor(DoctorArgs),
     Repair,
     Shutdown,
+    Tray,
     Autostart {
         #[command(subcommand)]
         command: AutostartCommand,
@@ -106,5 +107,11 @@ mod tests {
     fn parses_shutdown_command() {
         let cli = Cli::parse_from(["protoswitch", "shutdown"]);
         assert!(matches!(cli.command, Some(Commands::Shutdown)));
+    }
+
+    #[test]
+    fn parses_tray_command() {
+        let cli = Cli::parse_from(["protoswitch", "tray"]);
+        assert!(matches!(cli.command, Some(Commands::Tray)));
     }
 }

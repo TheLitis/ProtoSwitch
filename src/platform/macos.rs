@@ -60,7 +60,7 @@ fn launch_agent_path() -> anyhow::Result<PathBuf> {
 fn launch_agent_plist(executable: &Path) -> String {
     let executable = xml_escape(&executable.display().to_string());
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>com.thelitis.protoswitch</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{executable}</string>\n    <string>watch</string>\n    <string>--headless</string>\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <false/>\n  <key>WorkingDirectory</key>\n  <string>{}</string>\n</dict>\n</plist>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>com.thelitis.protoswitch</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{executable}</string>\n    <string>tray</string>\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <false/>\n  <key>WorkingDirectory</key>\n  <string>{}</string>\n</dict>\n</plist>\n",
         xml_escape(
             &executable
                 .rsplit_once(['/', '\\'])
@@ -84,12 +84,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn launch_agent_contains_program_arguments() {
+    fn launch_agent_contains_tray_argument() {
         let body = launch_agent_plist(Path::new(
             "/Applications/ProtoSwitch.app/Contents/MacOS/protoswitch",
         ));
-        assert!(body.contains("<string>watch</string>"));
-        assert!(body.contains("<string>--headless</string>"));
+        assert!(body.contains("<string>tray</string>"));
         assert!(body.contains("com.thelitis.protoswitch"));
     }
 }
