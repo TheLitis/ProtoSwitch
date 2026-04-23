@@ -123,8 +123,13 @@ function Test-ReleaseExists {
         return $false
     }
 
-    & gh release view $Tag --json tagName *> $null
-    return $LASTEXITCODE -eq 0
+    try {
+        $null = & gh release view $Tag --json tagName 2>$null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
 }
 
 function Assert-ReleaseBodyEncoding {
@@ -143,7 +148,7 @@ function Assert-ReleaseBodyEncoding {
         return
     }
 
-    $releaseJson = Invoke-Gh -Arguments @('release', 'view', $Tag, '--json', 'body,isPrerelease,title,assets,url')
+    $releaseJson = Invoke-Gh -Arguments @('release', 'view', $Tag, '--json', 'body,isPrerelease,name,assets,url')
     $release = $releaseJson | ConvertFrom-Json
 
     if ([string]::IsNullOrEmpty($release.body)) {
