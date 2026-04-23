@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::TASK_NAME;
 use crate::model::AutostartMethod;
+use crate::text::decode_output;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AutostartStatus {
@@ -25,7 +26,7 @@ pub fn install_autostart(executable: &Path) -> anyhow::Result<AutostartMethod> {
             let _ = remove_startup_launcher();
             Ok(AutostartMethod::ScheduledTask)
         }
-        Ok(output) => install_startup_fallback(executable, &render_output(&output)),
+        Ok(output) => install_startup_fallback(executable, &decode_output(&output)),
         Err(error) => install_startup_fallback(executable, &error.to_string()),
     }
 }
@@ -42,7 +43,7 @@ pub fn remove_autostart() -> anyhow::Result<()> {
     match delete_scheduled_task() {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
-            let message = render_output(&output);
+            let message = decode_output(&output);
             if !task_not_found(&message) {
                 errors.push(format!("schtasks /Delete: {message}"));
             }
@@ -284,21 +285,6 @@ fn task_not_found(message: &str) -> bool {
     value.contains("cannot find the file specified")
         || value.contains("не удается найти указанный файл")
         || value.contains("не удаётся найти указанный файл")
-}
-
-#[cfg(windows)]
-fn render_output(output: &Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !stderr.is_empty() {
-        return stderr;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !stdout.is_empty() {
-        return stdout;
-    }
-
-    "без текста ошибки".to_string()
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use anyhow::{Context, anyhow};
 use sysinfo::{ProcessesToUpdate, System};
 
 use crate::model::{MtProtoProxy, ProxyKind};
+use crate::text::{decode_bytes, decode_output};
 
 #[cfg(windows)]
 use winreg::RegKey;
@@ -52,7 +53,7 @@ pub fn open_proxy_link(proxy: &MtProtoProxy, timeout_secs: u64) -> anyhow::Resul
             .context("Не удалось вызвать PowerShell для tg://proxy")?;
 
     if !output.status.success() {
-        return Err(anyhow!(render_output(&output)));
+        return Err(anyhow!(decode_output(&output)));
     }
 
     Ok(())
@@ -72,10 +73,10 @@ pub fn probe_proxy_status(
         .context("Не удалось вызвать PowerShell для проверки proxy в Telegram")?;
 
     if !output.status.success() {
-        return Err(anyhow!(render_output(&output)));
+        return Err(anyhow!(decode_output(&output)));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_bytes(&output.stdout).trim().to_string();
     let line = stdout.lines().last().unwrap_or_default().trim();
     parse_probe_status_line(line)
 }
@@ -154,10 +155,10 @@ pub fn remove_proxies(proxies: &[MtProtoProxy]) -> anyhow::Result<usize> {
         .context("Не удалось вызвать PowerShell для очистки proxy в Telegram")?;
 
     if !output.status.success() {
-        return Err(anyhow!(render_output(&output)));
+        return Err(anyhow!(decode_output(&output)));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_bytes(&output.stdout).trim().to_string();
     if stdout.is_empty() {
         return Ok(0);
     }
@@ -357,10 +358,17 @@ fn run_hidden_powershell_output(script: &str) -> anyhow::Result<Output> {
             "-WindowStyle",
             "Hidden",
             "-Command",
-            script,
+            &with_utf8_powershell(script),
         ])
         .output()
         .context("Не удалось запустить PowerShell")
+}
+
+#[cfg(windows)]
+fn with_utf8_powershell(script: &str) -> String {
+    format!(
+        "$utf8NoBom = [System.Text.UTF8Encoding]::new($false)\n$OutputEncoding = $utf8NoBom\n[Console]::InputEncoding = $utf8NoBom\n[Console]::OutputEncoding = $utf8NoBom\n{script}"
+    )
 }
 
 #[cfg(windows)]
@@ -1676,20 +1684,6 @@ fn ps_literal(value: &str) -> String {
 }
 
 #[cfg(windows)]
-fn render_output(output: &Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !stderr.is_empty() {
-        return stderr;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !stdout.is_empty() {
-        return stdout;
-    }
-
-    "без текста ошибки".to_string()
-}
-
 #[derive(Debug, Clone)]
 pub struct TelegramInstallation {
     pub protocol_handler: Option<String>,

@@ -4,6 +4,7 @@ mod model;
 mod paths;
 mod provider;
 mod telegram;
+mod text;
 mod ui;
 mod windows;
 
