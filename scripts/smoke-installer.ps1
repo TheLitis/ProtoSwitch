@@ -9,6 +9,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $utf8NoBom
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptRoot
 
@@ -116,6 +121,39 @@ function Restore-Directory {
     }
 }
 
+function Backup-File {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$BackupPath
+    )
+
+    if (Test-Path $Path) {
+        Move-Item -LiteralPath $Path -Destination $BackupPath
+        return $true
+    }
+
+    return $false
+}
+
+function Restore-File {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$BackupPath
+    )
+
+    if (Test-Path $Path) {
+        Remove-Item -LiteralPath $Path -Force
+    }
+
+    if (Test-Path $BackupPath) {
+        Move-Item -LiteralPath $BackupPath -Destination $Path
+    }
+}
+
 function Invoke-External {
     param(
         [Parameter(Mandatory = $true)]
@@ -137,6 +175,35 @@ function Invoke-External {
     }
 
     return ($output | Out-String)
+}
+
+function Assert-ContainsText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text,
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
+        [Parameter(Mandatory = $true)]
+        [string]$Expected
+    )
+
+    if ($DryRun) {
+        Write-Host "[dry-run] assert $Label contains $Expected"
+        return
+    }
+
+    if (-not $Text.Contains($Expected)) {
+        throw "$Label does not contain expected text: $Expected"
+    }
+}
+
+function Decode-Utf8Literal {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Base64
+    )
+
+    return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Base64))
 }
 
 function Invoke-Process {
@@ -239,7 +306,26 @@ function Invoke-SmokeRun {
         Assert-PathExists -Path $path
     }
 
+    foreach ($docPath in @(
+        (Join-Path $installDir 'README.md'),
+        (Join-Path $installDir 'CHANGELOG.md'),
+        (Join-Path $installDir 'QUICKSTART.txt')
+    )) {
+        if (-not $DryRun) {
+            switch ([System.IO.Path]::GetFileName($docPath)) {
+                'README.md' { Assert-ContainsText -Text (Get-Content -Raw -Encoding utf8 $docPath) -Label $docPath -Expected (Decode-Utf8Literal '0KfRgtC+INCV0YHRgtGMINCh0LXQudGH0LDRgQ==') }
+                'CHANGELOG.md' { Assert-ContainsText -Text (Get-Content -Raw -Encoding utf8 $docPath) -Label $docPath -Expected (Decode-Utf8Literal '0JLRgdC1INC30LDQvNC10YLQvdGL0LUg0LjQt9C80LXQvdC10L3QuNGP') }
+                'QUICKSTART.txt' { Assert-ContainsText -Text (Get-Content -Raw -Encoding utf8 $docPath) -Label $docPath -Expected (Decode-Utf8Literal '0JHRi9GB0YLRgNGL0Lkg0YHRgtCw0YDRgg==') }
+            }
+        }
+    }
+
     Invoke-External -FilePath $exePath -Arguments @('--version') | Out-Null
+    $doctorPlain = Invoke-External -FilePath $exePath -Arguments @('doctor')
+    $statusPlain = Invoke-External -FilePath $exePath -Arguments @('status', '--plain')
+    Assert-ContainsText -Text $doctorPlain -Label 'doctor' -Expected (Decode-Utf8Literal '0KHRgtCw0YLRg9GBIHByb3h5')
+    Assert-ContainsText -Text $doctorPlain -Label 'doctor' -Expected (Decode-Utf8Literal '0KHRgtCw0YLRg9GBINC40YHRgtC+0YfQvdC40LrQsA==')
+    Assert-ContainsText -Text $statusPlain -Label 'status' -Expected (Decode-Utf8Literal '0KHRgtCw0YLRg9GBIHByb3h5')
 
     $doctorJson = Invoke-External -FilePath $exePath -Arguments @('doctor', '--json')
     $doctor = if ($DryRun) { $null } else { $doctorJson | ConvertFrom-Json }
@@ -311,6 +397,11 @@ $configDir = Join-Path $env:APPDATA 'ProtoSwitch'
 $localStateDir = Join-Path $env:LOCALAPPDATA 'ProtoSwitch'
 $configBackup = Join-Path $tempRoot 'backup-config'
 $stateBackup = Join-Path $tempRoot 'backup-local'
+$startupDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
+$startupShortcut = Join-Path $startupDir 'ProtoSwitch.lnk'
+$startupLegacy = Join-Path $startupDir 'ProtoSwitch.cmd'
+$startupShortcutBackup = Join-Path $tempRoot 'backup-ProtoSwitch.lnk'
+$startupLegacyBackup = Join-Path $tempRoot 'backup-ProtoSwitch.cmd'
 $configMoved = $false
 $stateMoved = $false
 
@@ -333,6 +424,8 @@ if (-not $DryRun) {
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
     $configMoved = Backup-Directory -Path $configDir -BackupPath $configBackup
     $stateMoved = Backup-Directory -Path $localStateDir -BackupPath $stateBackup
+    [void](Backup-File -Path $startupShortcut -BackupPath $startupShortcutBackup)
+    [void](Backup-File -Path $startupLegacy -BackupPath $startupLegacyBackup)
 }
 
 try {
@@ -365,6 +458,9 @@ finally {
         if (-not $stateMoved -and (Test-Path $localStateDir)) {
             Remove-Item -LiteralPath $localStateDir -Recurse -Force
         }
+
+        Restore-File -Path $startupShortcut -BackupPath $startupShortcutBackup
+        Restore-File -Path $startupLegacy -BackupPath $startupLegacyBackup
     }
 }
 

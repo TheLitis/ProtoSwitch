@@ -31,7 +31,7 @@ function Read-Utf8File {
         [string]$Path
     )
 
-    return [System.IO.File]::ReadAllText($Path, $utf8NoBom)
+    return Get-Content -Raw -Encoding utf8 $Path
 }
 
 function Write-Utf8File {
@@ -80,6 +80,10 @@ function Assert-GitTagExists {
         [Parameter(Mandatory = $true)]
         [string]$Tag
     )
+
+    if ($DryRun) {
+        return
+    }
 
     Push-Location $repoRoot
     try {

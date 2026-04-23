@@ -37,6 +37,8 @@ jobs:
   windows:
     needs: metadata
     runs-on: windows-2025
+    env:
+      RUSTFLAGS: -Dwarnings
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -49,6 +51,12 @@ jobs:
       - name: Build Windows distribution
         shell: pwsh
         run: ./scripts/build-distribution.ps1
+      - name: Smoke portable
+        shell: pwsh
+        run: ./scripts/smoke-portable.ps1 -Version ${{ needs.metadata.outputs.version }}
+      - name: Smoke installer
+        shell: pwsh
+        run: ./scripts/smoke-installer.ps1 -Version ${{ needs.metadata.outputs.version }} -Mode CurrentUser
       - uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
@@ -65,6 +73,8 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    env:
+      RUSTFLAGS: -Dwarnings
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -86,6 +96,15 @@ jobs:
             --arch "${{ matrix.arch }}" \
             --binary "$PWD/target/release/protoswitch" \
             --format tar.gz
+      - name: Smoke portable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/smoke-unix.py \
+            --repo-root "$PWD" \
+            --version "${{ needs.metadata.outputs.version }}" \
+            --platform linux \
+            --arch "${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}-artifacts
@@ -102,6 +121,8 @@ jobs:
           - runner: macos-15
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    env:
+      RUSTFLAGS: -Dwarnings
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -123,6 +144,15 @@ jobs:
             --arch "${{ matrix.arch }}" \
             --binary "$PWD/target/release/protoswitch" \
             --format tar.gz
+      - name: Smoke portable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/smoke-unix.py \
+            --repo-root "$PWD" \
+            --version "${{ needs.metadata.outputs.version }}" \
+            --platform macos \
+            --arch "${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}-artifacts
@@ -159,7 +189,7 @@ jobs:
 
           version = "${{ needs.metadata.outputs.version }}"
           tag = f"v{version}"
-          content = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          content = Path("CHANGELOG.md").read_text(encoding="utf-8-sig")
           match = re.search(rf"(?ms)^## \[{re.escape(tag)}\][^\n]*\n(.*?)(?=^## \[|\Z)", content)
           if not match:
               raise SystemExit(f"Release notes for {tag} not found")
