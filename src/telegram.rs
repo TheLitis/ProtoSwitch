@@ -1806,9 +1806,9 @@ pub struct TelegramInstallation {
 
 fn managed_mode_label(mode: DesktopProxyMode) -> &'static str {
     match mode {
-        DesktopProxyMode::System => "system",
-        DesktopProxyMode::Enabled => "enabled",
-        DesktopProxyMode::Disabled => "disabled",
+        DesktopProxyMode::System => "системный",
+        DesktopProxyMode::Enabled => "включён",
+        DesktopProxyMode::Disabled => "выключен",
     }
 }
 

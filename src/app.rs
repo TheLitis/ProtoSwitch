@@ -15,16 +15,17 @@ use crate::cli::{
 use crate::model::{
     AppConfig, AppState, AutostartMethod, InitOverrides, MtProtoProxy, ProxyRecord, WatcherMode,
 };
+use crate::platform;
 use crate::paths::AppPaths;
 use crate::provider::MtProtoProvider;
 use crate::telegram;
 use crate::ui;
-use crate::windows;
 use crate::{APP_NAME, APP_VERSION};
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DoctorSnapshot {
     pub app_version: String,
+    pub platform: String,
     pub config_exists: bool,
     pub state_exists: bool,
     pub log_exists: bool,
@@ -32,11 +33,16 @@ pub(crate) struct DoctorSnapshot {
     pub telegram_executable: Option<String>,
     pub telegram_data_dir: Option<String>,
     pub telegram_running: bool,
+    pub current_proxy_status: String,
+    pub source_status: String,
     pub backend_mode: String,
+    pub backend_status: String,
+    pub backend_route: String,
+    pub backend_restart_required: bool,
     pub managed_proxy_mode: Option<String>,
     pub managed_selected_proxy: Option<String>,
     pub managed_proxy_count: Option<usize>,
-    pub autostart: windows::AutostartStatus,
+    pub autostart: platform::AutostartStatus,
     pub enabled_sources: Vec<String>,
     pub provider_probe: Result<String, String>,
 }
@@ -234,6 +240,7 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
     }
 
     println!("ProtoSwitch {}", APP_VERSION);
+    println!("Платформа: {}", report.platform);
     println!("config.toml: {}", yes_no(paths.config_file.exists()));
     println!("state.json: {}", yes_no(paths.state_file.exists()));
     println!("watch.log: {}", yes_no(paths.log_file.exists()));
@@ -254,7 +261,15 @@ fn handle_doctor(paths: &AppPaths, args: DoctorArgs) -> anyhow::Result<()> {
         report.telegram_data_dir.as_deref().unwrap_or("не найден")
     );
     println!("Telegram запущен: {}", yes_no(report.telegram_running));
+    println!("Статус proxy: {}", report.current_proxy_status);
+    println!("Статус источника: {}", report.source_status);
     println!("Telegram backend: {}", report.backend_mode);
+    println!("Статус backend: {}", report.backend_status);
+    println!("Путь применения: {}", report.backend_route);
+    println!(
+        "Нужен перезапуск Telegram: {}",
+        yes_no(report.backend_restart_required)
+    );
     println!(
         "Managed proxy mode: {}",
         report.managed_proxy_mode.as_deref().unwrap_or("нет данных")
@@ -518,7 +533,7 @@ fn print_plain_status(
     paths: &AppPaths,
     config: &AppConfig,
     state: &AppState,
-    autostart: &windows::AutostartStatus,
+    autostart: &platform::AutostartStatus,
 ) {
     println!("ProtoSwitch {}", APP_VERSION);
     println!("Статус proxy: {}", current_proxy_status_text(state));
@@ -613,20 +628,18 @@ fn print_plain_status_v2(
     paths: &AppPaths,
     config: &AppConfig,
     state: &AppState,
-    autostart: &windows::AutostartStatus,
+    autostart: &platform::AutostartStatus,
 ) {
     let managed = telegram::managed_settings_status(&config.telegram).ok();
     println!("ProtoSwitch {}", APP_VERSION);
+    println!("Платформа: {}", platform::current_os_label());
     println!("Статус proxy: {}", current_proxy_status_text(state));
     println!("Статус источника: {}", source_status_text(state));
     println!(
         "Статус backend: {}",
         backend_status_text(state, managed.as_ref())
     );
-    println!(
-        "Backend route: {}",
-        backend_route_text(state, managed.as_ref())
-    );
+    println!("Путь применения: {}", backend_route_text(state, managed.as_ref()));
     println!("Пул источников: {}", provider_pool_summary(config));
     println!("Включённые источники: {}", enabled_sources_summary(config));
     println!(
@@ -753,7 +766,7 @@ pub(crate) fn source_status_text(state: &AppState) -> String {
     "нет данных".to_string()
 }
 
-fn backend_status_text(
+pub(crate) fn backend_status_text(
     state: &AppState,
     managed: Option<&telegram::ManagedSettingsStatus>,
 ) -> String {
@@ -778,12 +791,12 @@ fn backend_status_text(
         .unwrap_or_else(|| "нет данных".to_string())
 }
 
-fn backend_route_text(
+pub(crate) fn backend_route_text(
     state: &AppState,
     managed: Option<&telegram::ManagedSettingsStatus>,
 ) -> String {
     if state.backend_restart_required && !state.backend_route.trim().is_empty() {
-        return format!("pending until restart / {}", state.backend_route);
+        return format!("ожидает перезапуска / {}", state.backend_route);
     }
 
     if !state.backend_route.trim().is_empty() {
@@ -887,7 +900,7 @@ fn try_cleanup_dead_proxies(paths: &AppPaths, config: &AppConfig, state: &mut Ap
 
 pub(crate) fn load_status_snapshot(
     paths: &AppPaths,
-) -> anyhow::Result<(AppConfig, AppState, windows::AutostartStatus)> {
+) -> anyhow::Result<(AppConfig, AppState, platform::AutostartStatus)> {
     let config = AppConfig::load(paths)?;
     let mut state = AppState::load(paths)?;
     state.watcher.telegram_running = telegram::is_running().unwrap_or(false);
@@ -902,7 +915,7 @@ pub(crate) fn load_status_snapshot(
             state.set_backend_route(managed.data_dir.join("settingss").display().to_string());
         }
     }
-    let autostart = windows::query_autostart();
+    let autostart = platform::query_autostart();
     Ok((config, state, autostart))
 }
 
@@ -1296,10 +1309,11 @@ pub(crate) fn doctor_snapshot(paths: &AppPaths) -> anyhow::Result<DoctorSnapshot
 
 pub(crate) fn doctor_snapshot_v2(paths: &AppPaths) -> anyhow::Result<DoctorSnapshot> {
     let config = AppConfig::load(paths)?;
+    let state = AppState::load(paths)?;
     let provider = MtProtoProvider::new(config.provider.clone())?;
     let installation = telegram::detect_installation()?;
     let managed = telegram::managed_settings_status(&config.telegram).ok();
-    let autostart = windows::query_autostart();
+    let autostart = platform::query_autostart();
     let provider_probe =
         fetch_validated_candidate(paths, &config, &provider, &[] as &[MtProtoProxy])
             .map(|record| format!("{} via {}", record.proxy.short_label(), record.source))
@@ -1307,6 +1321,7 @@ pub(crate) fn doctor_snapshot_v2(paths: &AppPaths) -> anyhow::Result<DoctorSnaps
 
     Ok(DoctorSnapshot {
         app_version: APP_VERSION.to_string(),
+        platform: platform::current_os_label().to_string(),
         config_exists: paths.config_file.exists(),
         state_exists: paths.state_file.exists(),
         log_exists: paths.log_file.exists(),
@@ -1316,7 +1331,12 @@ pub(crate) fn doctor_snapshot_v2(paths: &AppPaths) -> anyhow::Result<DoctorSnaps
             .map(|path| path.display().to_string()),
         telegram_data_dir: installation.data_dir.map(|path| path.display().to_string()),
         telegram_running: telegram::is_running().unwrap_or(false),
+        current_proxy_status: current_proxy_status_text(&state),
+        source_status: source_status_text(&state),
         backend_mode: telegram_backend_mode_label(&config.telegram.backend_mode).to_string(),
+        backend_status: backend_status_text(&state, managed.as_ref()),
+        backend_route: backend_route_text(&state, managed.as_ref()),
+        backend_restart_required: state.backend_restart_required,
         managed_proxy_mode: managed.as_ref().map(|status| status.mode_label.clone()),
         managed_selected_proxy: managed.as_ref().map(|status| status.selected_label.clone()),
         managed_proxy_count: managed.as_ref().map(|status| status.proxy_count),
@@ -1373,13 +1393,13 @@ fn persist_config_with_restart(
     };
 
     if config.autostart.enabled {
-        let method = windows::install_autostart(
+        let method = platform::install_autostart(
             &std::env::current_exe().context("Не удалось определить путь к protoswitch.exe")?,
         )?;
         config.autostart.method = method;
     } else {
-        let _ = windows::remove_autostart();
-        config.autostart.method = AutostartMethod::ScheduledTask;
+        let _ = platform::remove_autostart();
+        config.autostart.method = default_autostart_method();
     }
 
     config.save(&paths.config_file)?;
@@ -1599,7 +1619,29 @@ fn autostart_method_label(method: &AutostartMethod) -> &'static str {
     match method {
         AutostartMethod::ScheduledTask => "scheduled_task",
         AutostartMethod::StartupFolder => "startup_folder",
+        AutostartMethod::XdgDesktop => "xdg_desktop",
+        AutostartMethod::LaunchAgent => "launch_agent",
     }
+}
+
+fn default_autostart_method() -> AutostartMethod {
+    #[cfg(windows)]
+    {
+        return AutostartMethod::ScheduledTask;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return AutostartMethod::XdgDesktop;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return AutostartMethod::LaunchAgent;
+    }
+
+    #[allow(unreachable_code)]
+    AutostartMethod::ScheduledTask
 }
 
 fn telegram_backend_mode_label(mode: &crate::model::TelegramBackendMode) -> &'static str {

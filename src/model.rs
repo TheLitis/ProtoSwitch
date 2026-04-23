@@ -400,6 +400,8 @@ pub enum AutostartMethod {
     #[default]
     ScheduledTask,
     StartupFolder,
+    XdgDesktop,
+    LaunchAgent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,9 +415,29 @@ impl Default for AutostartConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            method: AutostartMethod::ScheduledTask,
+            method: default_autostart_method(),
         }
     }
+}
+
+fn default_autostart_method() -> AutostartMethod {
+    #[cfg(windows)]
+    {
+        return AutostartMethod::ScheduledTask;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return AutostartMethod::XdgDesktop;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return AutostartMethod::LaunchAgent;
+    }
+
+    #[allow(unreachable_code)]
+    AutostartMethod::ScheduledTask
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

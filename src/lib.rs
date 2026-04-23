@@ -8,7 +8,6 @@ mod tdesktop;
 mod telegram;
 mod text;
 mod ui;
-mod windows;
 
 pub const APP_NAME: &str = "ProtoSwitch";
 pub const TASK_NAME: &str = "ProtoSwitch";

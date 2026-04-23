@@ -19,8 +19,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem,
 use crate::APP_VERSION;
 use crate::app;
 use crate::model::{AppConfig, AppState, AutostartMethod, ProxyKind, WatcherMode};
+use crate::platform;
 use crate::paths::AppPaths;
-use crate::windows;
 
 pub fn stdout_is_terminal() -> bool {
     io::stdout().is_terminal()
@@ -95,6 +95,14 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 console.force_refresh = true;
                 console.clear_inspector();
                 console.push_activity("Экран перечитан и перерисован.".to_string());
+                continue;
+            }
+            KeyCode::PageUp => {
+                console.scroll_activity_up();
+                continue;
+            }
+            KeyCode::PageDown => {
+                console.scroll_activity_down();
                 continue;
             }
             KeyCode::Left => {
@@ -536,12 +544,12 @@ fn render_console(
     );
 
     match console.section {
-        ConsoleSection::Dashboard => render_dashboard(frame, vertical[2], snapshot, console),
+        ConsoleSection::Dashboard => render_dashboard_responsive(frame, vertical[2], snapshot, console),
         ConsoleSection::Actions => {
-            render_actions(frame, vertical[2], paths, snapshot, console, actions)
+            render_actions_responsive(frame, vertical[2], paths, snapshot, console, actions)
         }
-        ConsoleSection::Providers => render_providers(frame, vertical[2], snapshot, console),
-        ConsoleSection::History => render_history(frame, vertical[2], snapshot, console),
+        ConsoleSection::Providers => render_providers_responsive(frame, vertical[2], snapshot, console),
+        ConsoleSection::History => render_history_responsive(frame, vertical[2], snapshot, console),
     }
 
     let footer = Paragraph::new(footer_hint(console.section))
@@ -550,6 +558,7 @@ fn render_console(
     frame.render_widget(footer, vertical[3]);
 }
 
+#[allow(dead_code)]
 fn render_dashboard(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -803,6 +812,7 @@ fn render_dashboard(
     );
 }
 
+#[allow(dead_code)]
 fn render_actions(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -861,6 +871,7 @@ fn render_actions(
     );
 }
 
+#[allow(dead_code)]
 fn render_providers(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -973,6 +984,7 @@ fn render_providers(
     );
 }
 
+#[allow(dead_code)]
 fn render_history(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -1045,6 +1057,734 @@ fn render_history(
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WidthMode {
+    Narrow,
+    Regular,
+    Wide,
+}
+
+fn width_mode(width: u16) -> WidthMode {
+    if width < 108 {
+        WidthMode::Narrow
+    } else if width < 148 {
+        WidthMode::Regular
+    } else {
+        WidthMode::Wide
+    }
+}
+
+fn render_dashboard_responsive(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &UiSnapshot,
+    console: &ConsoleState,
+) {
+    let proxy_status = app::current_proxy_status_text(&snapshot.state);
+    let source_status = app::source_status_text(&snapshot.state);
+    let backend_status = app::backend_status_text(&snapshot.state, None);
+    let backend_route = app::backend_route_text(&snapshot.state, None);
+    let current_proxy_style = snapshot
+        .state
+        .current_proxy
+        .as_ref()
+        .map(|record| protocol_style(record.proxy.kind))
+        .unwrap_or_else(muted_style);
+    let pending_style = snapshot
+        .state
+        .pending_proxy
+        .as_ref()
+        .map(|record| protocol_style(record.proxy.kind))
+        .unwrap_or_else(muted_style);
+    let active_sources = snapshot.config.provider.active_sources();
+    let (mtproto_count, socks5_count) = snapshot.config.provider.source_counts();
+    let ready_count = [
+        snapshot.watcher_online,
+        snapshot.state.watcher.telegram_running,
+        !active_sources.is_empty(),
+    ]
+    .into_iter()
+    .filter(|value| *value)
+    .count();
+    let failure_ratio = if snapshot.config.watcher.failure_threshold == 0 {
+        0.0
+    } else {
+        let remaining = snapshot
+            .config
+            .watcher
+            .failure_threshold
+            .saturating_sub(snapshot.state.watcher.failure_streak);
+        remaining as f64 / snapshot.config.watcher.failure_threshold as f64
+    };
+
+    let proxy_lines = |width: u16| {
+        vec![
+            Line::from(vec![
+                Span::styled("Current  ", muted_style()),
+                Span::styled(
+                    compact_to_width(
+                        &snapshot
+                            .state
+                            .current_proxy
+                            .as_ref()
+                            .map(|record| record.proxy.short_label())
+                            .unwrap_or_else(|| "не выбран".to_string()),
+                        width,
+                        14,
+                    ),
+                    current_proxy_style,
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Status   ", muted_style()),
+                Span::styled(compact_to_width(&proxy_status, width, 14), semantic_style(&proxy_status)),
+            ]),
+            Line::from(vec![
+                Span::styled("Source   ", muted_style()),
+                Span::styled(
+                    compact_to_width(
+                        &snapshot
+                            .state
+                            .current_proxy
+                            .as_ref()
+                            .map(|record| record.source.clone())
+                            .unwrap_or_else(|| "ещё не закреплён".to_string()),
+                        width,
+                        14,
+                    ),
+                    text_style(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Pending  ", muted_style()),
+                Span::styled(
+                    compact_to_width(
+                        &snapshot
+                            .state
+                            .pending_proxy
+                            .as_ref()
+                            .map(|record| record.proxy.short_label())
+                            .unwrap_or_else(|| "пусто".to_string()),
+                        width,
+                        14,
+                    ),
+                    pending_style,
+                ),
+            ]),
+            kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref()), width),
+            kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref()), width),
+        ]
+    };
+
+    let runtime_lines = |width: u16| {
+        vec![
+            kv_line(
+                "Watcher",
+                format!(
+                    "{} / fail {}/{}",
+                    mode_label(&snapshot.state.watcher.mode),
+                    snapshot.state.watcher.failure_streak,
+                    snapshot.config.watcher.failure_threshold
+                ),
+                width,
+            ),
+            kv_line(
+                "Telegram",
+                if snapshot.state.watcher.telegram_running {
+                    "запущен".to_string()
+                } else {
+                    "не запущен".to_string()
+                },
+                width,
+            ),
+            kv_line("Источник", source_status.clone(), width),
+            kv_line(
+                "Автозапуск",
+                if snapshot.autostart.installed || snapshot.config.autostart.enabled {
+                    snapshot
+                        .autostart
+                        .method
+                        .as_ref()
+                        .map(autostart_method_label)
+                        .unwrap_or("pending")
+                        .to_string()
+                } else {
+                    "выключен".to_string()
+                },
+                width,
+            ),
+            kv_line("Платформа", platform::current_os_label().to_string(), width),
+            kv_line(
+                "След. проверка",
+                format_time(snapshot.state.watcher.next_check_at.as_ref()),
+                width,
+            ),
+        ]
+    };
+
+    let backend_lines = |width: u16| {
+        vec![
+            kv_line("Статус", backend_status.clone(), width),
+            kv_line("Путь", backend_route.clone(), width),
+            kv_line(
+                "Режим",
+                format!("{:?}", snapshot.config.telegram.backend_mode).to_ascii_lowercase(),
+                width,
+            ),
+            kv_line(
+                "Рестарт",
+                if snapshot.state.backend_restart_required {
+                    "нужен".to_string()
+                } else {
+                    "нет".to_string()
+                },
+                width,
+            ),
+            kv_line(
+                "Авточистка",
+                if snapshot.config.watcher.auto_cleanup_dead_proxies {
+                    "включена".to_string()
+                } else {
+                    "выключена".to_string()
+                },
+                width,
+            ),
+            kv_line(
+                "SOCKS5",
+                if snapshot.config.provider.enable_socks5_fallback {
+                    "fallback включён".to_string()
+                } else {
+                    "fallback выключен".to_string()
+                },
+                width,
+            ),
+        ]
+    };
+
+    match width_mode(area.width) {
+        WidthMode::Narrow => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(8),
+                    Constraint::Length(8),
+                    Constraint::Length(8),
+                    Constraint::Length(7),
+                    Constraint::Min(6),
+                ])
+                .split(area);
+            frame.render_widget(
+                Paragraph::new(proxy_lines(rows[0].width))
+                    .block(toned_panel("Proxy", &proxy_status))
+                    .wrap(Wrap { trim: true }),
+                rows[0],
+            );
+            frame.render_widget(
+                Paragraph::new(runtime_lines(rows[1].width))
+                    .block(toned_panel("Сессия", &source_status))
+                    .wrap(Wrap { trim: true }),
+                rows[1],
+            );
+            frame.render_widget(
+                Paragraph::new(backend_lines(rows[2].width))
+                    .block(toned_panel("Применение", &backend_status))
+                    .wrap(Wrap { trim: true }),
+                rows[2],
+            );
+            frame.render_widget(
+                Paragraph::new(vec![
+                    kv_line("Pool", app::provider_pool_summary(&snapshot.config), rows[3].width),
+                    kv_line("Feeds", app::enabled_sources_summary(&snapshot.config), rows[3].width),
+                    kv_line("Ready", format!("{ready_count}/3 ready"), rows[3].width),
+                    kv_line(
+                        "Failures",
+                        format!(
+                            "{}/{}",
+                            snapshot.state.watcher.failure_streak,
+                            snapshot.config.watcher.failure_threshold
+                        ),
+                        rows[3].width,
+                    ),
+                ])
+                .block(panel("Источники"))
+                .wrap(Wrap { trim: true }),
+                rows[3],
+            );
+            render_activity_panel(frame, rows[4], console);
+        }
+        WidthMode::Regular => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(8),
+                    Constraint::Length(8),
+                    Constraint::Length(7),
+                    Constraint::Min(6),
+                ])
+                .split(area);
+            let top = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(rows[0]);
+            let middle = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+                .split(rows[1]);
+            let gauges = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(rows[2]);
+
+            frame.render_widget(
+                Paragraph::new(proxy_lines(top[0].width))
+                    .block(toned_panel("Proxy", &proxy_status))
+                    .wrap(Wrap { trim: true }),
+                top[0],
+            );
+            frame.render_widget(
+                Paragraph::new(runtime_lines(top[1].width))
+                    .block(toned_panel("Сессия", &source_status))
+                    .wrap(Wrap { trim: true }),
+                top[1],
+            );
+            frame.render_widget(
+                Paragraph::new(backend_lines(middle[0].width))
+                    .block(toned_panel("Применение", &backend_status))
+                    .wrap(Wrap { trim: true }),
+                middle[0],
+            );
+            render_status_card(
+                frame,
+                middle[1],
+                "Источники",
+                app::provider_pool_summary(&snapshot.config),
+                app::enabled_sources_summary(&snapshot.config),
+            );
+            render_gauge_card(
+                frame,
+                gauges[0],
+                "Watcher",
+                failure_ratio,
+                &format!(
+                    "{}/{} failures",
+                    snapshot.state.watcher.failure_streak,
+                    snapshot.config.watcher.failure_threshold
+                ),
+                &format!("mode: {}", mode_label(&snapshot.state.watcher.mode)),
+            );
+            render_gauge_card(
+                frame,
+                gauges[1],
+                "Pool",
+                mtproto_count as f64 / active_sources.len().max(1) as f64,
+                &app::provider_pool_summary(&snapshot.config),
+                &format!("{socks5_count} SOCKS5 feeds"),
+            );
+            render_gauge_card(
+                frame,
+                gauges[2],
+                "Ready",
+                ready_count as f64 / 3.0,
+                &format!("{ready_count}/3 ready"),
+                &compact_to_width(&app::enabled_sources_summary(&snapshot.config), gauges[2].width, 10),
+            );
+            render_activity_panel(frame, rows[3], console);
+        }
+        WidthMode::Wide => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(8), Constraint::Length(7), Constraint::Min(6)])
+                .split(area);
+            let hero = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(38),
+                    Constraint::Percentage(31),
+                    Constraint::Percentage(31),
+                ])
+                .split(rows[0]);
+            let middle = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(rows[1]);
+            frame.render_widget(
+                Paragraph::new(proxy_lines(hero[0].width))
+                    .block(toned_panel("Proxy", &proxy_status))
+                    .wrap(Wrap { trim: true }),
+                hero[0],
+            );
+            frame.render_widget(
+                Paragraph::new(runtime_lines(hero[1].width))
+                    .block(toned_panel("Сессия", &source_status))
+                    .wrap(Wrap { trim: true }),
+                hero[1],
+            );
+            frame.render_widget(
+                Paragraph::new(backend_lines(hero[2].width))
+                    .block(toned_panel("Применение", &backend_status))
+                    .wrap(Wrap { trim: true }),
+                hero[2],
+            );
+            render_gauge_card(
+                frame,
+                middle[0],
+                "Watcher",
+                failure_ratio,
+                &format!(
+                    "{}/{} failures",
+                    snapshot.state.watcher.failure_streak,
+                    snapshot.config.watcher.failure_threshold
+                ),
+                &format!("mode: {}", mode_label(&snapshot.state.watcher.mode)),
+            );
+            render_gauge_card(
+                frame,
+                middle[1],
+                "Pool",
+                mtproto_count as f64 / active_sources.len().max(1) as f64,
+                &app::provider_pool_summary(&snapshot.config),
+                &format!("{socks5_count} SOCKS5 feeds"),
+            );
+            render_gauge_card(
+                frame,
+                middle[2],
+                "Ready",
+                ready_count as f64 / 3.0,
+                &format!("{ready_count}/3 ready"),
+                &compact_to_width(&app::enabled_sources_summary(&snapshot.config), middle[2].width, 10),
+            );
+            render_activity_panel(frame, rows[2], console);
+        }
+    }
+}
+
+fn render_actions_responsive(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    paths: &AppPaths,
+    snapshot: &UiSnapshot,
+    console: &ConsoleState,
+    actions: &[ConsoleAction],
+) {
+    let action_items = actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let selected = index == console.focus;
+            let style = if selected {
+                selected_style()
+            } else {
+                text_style()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(if selected { "> " } else { "  " }, style),
+                Span::styled(action.label(snapshot), style),
+                Span::raw("  "),
+                Span::styled(action.shortcut(), muted_style()),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    let detail = if console.inspector_lines.is_empty() {
+        action_description_lines(actions[console.focus], snapshot, paths)
+    } else {
+        console.inspector_lines.clone()
+    };
+
+    match width_mode(area.width) {
+        WidthMode::Narrow => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(12), Constraint::Length(10), Constraint::Min(6)])
+                .split(area);
+            frame.render_widget(List::new(action_items).block(panel("Команды")), rows[0]);
+            frame.render_widget(
+                Paragraph::new(detail)
+                    .block(panel(&console.inspector_title))
+                    .wrap(Wrap { trim: true }),
+                rows[1],
+            );
+            render_activity_panel(frame, rows[2], console);
+        }
+        _ => {
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
+                .split(area);
+            frame.render_widget(List::new(action_items).block(panel("Команды")), columns[0]);
+            let right = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(11), Constraint::Min(8)])
+                .split(columns[1]);
+            frame.render_widget(
+                Paragraph::new(detail)
+                    .block(panel(&console.inspector_title))
+                    .wrap(Wrap { trim: true }),
+                right[0],
+            );
+            render_activity_panel(frame, right[1], console);
+        }
+    }
+}
+
+fn render_providers_responsive(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &UiSnapshot,
+    console: &ConsoleState,
+) {
+    let state_headline = app::source_status_text(&snapshot.state);
+    let fallback_status = if snapshot.config.provider.enable_socks5_fallback {
+        "SOCKS5 fallback включён".to_string()
+    } else {
+        "только MTProto".to_string()
+    };
+
+    match width_mode(area.width) {
+        WidthMode::Narrow => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                    Constraint::Min(8),
+                    Constraint::Min(6),
+                ])
+                .split(area);
+            render_status_card(
+                frame,
+                rows[0],
+                "Pool",
+                app::provider_pool_summary(&snapshot.config),
+                app::enabled_sources_summary(&snapshot.config),
+            );
+            render_status_card(
+                frame,
+                rows[1],
+                "Состояние источника",
+                state_headline,
+                snapshot
+                    .state
+                    .current_proxy
+                    .as_ref()
+                    .map(|record| format!("last good feed: {}", record.source))
+                    .unwrap_or_else(|| "ещё нет подтверждённого источника".to_string()),
+            );
+            render_status_card(
+                frame,
+                rows[2],
+                "Резерв",
+                fallback_status,
+                "F переключает запасные SOCKS5-ленты".to_string(),
+            );
+            frame.render_widget(
+                List::new(provider_source_items(snapshot, rows[3].width)).block(panel("Ленты")),
+                rows[3],
+            );
+            render_activity_panel(frame, rows[4], console);
+        }
+        _ => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(8), Constraint::Min(10)])
+                .split(area);
+            let top = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(rows[0]);
+            render_status_card(
+                frame,
+                top[0],
+                "Pool",
+                app::provider_pool_summary(&snapshot.config),
+                app::enabled_sources_summary(&snapshot.config),
+            );
+            render_status_card(
+                frame,
+                top[1],
+                "Состояние источника",
+                app::source_status_text(&snapshot.state),
+                snapshot
+                    .state
+                    .current_proxy
+                    .as_ref()
+                    .map(|record| format!("last good feed: {}", record.source))
+                    .unwrap_or_else(|| "ещё нет подтверждённого источника".to_string()),
+            );
+            render_status_card(
+                frame,
+                top[2],
+                "Резерв",
+                if snapshot.config.provider.enable_socks5_fallback {
+                    "SOCKS5 fallback включён".to_string()
+                } else {
+                    "только MTProto".to_string()
+                },
+                "F переключает запасные SOCKS5-ленты".to_string(),
+            );
+            let bottom = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+                .split(rows[1]);
+            frame.render_widget(
+                List::new(provider_source_items(snapshot, bottom[0].width)).block(panel("Ленты")),
+                bottom[0],
+            );
+            frame.render_widget(
+                Paragraph::new(vec![
+                    kv_line(
+                        "Fetch tries",
+                        snapshot.config.provider.fetch_attempts.to_string(),
+                        bottom[1].width,
+                    ),
+                    kv_line(
+                        "Retry delay",
+                        format!("{} ms", snapshot.config.provider.fetch_retry_delay_ms),
+                        bottom[1].width,
+                    ),
+                    kv_line(
+                        "Active feeds",
+                        snapshot.config.provider.active_sources().len().to_string(),
+                        bottom[1].width,
+                    ),
+                    kv_line(
+                        "Current source",
+                        snapshot
+                            .state
+                            .current_proxy
+                            .as_ref()
+                            .map(|record| record.source.clone())
+                            .unwrap_or_else(|| "ещё не закреплён".to_string()),
+                        bottom[1].width,
+                    ),
+                    kv_line(
+                        "Last error",
+                        snapshot
+                            .state
+                            .last_error
+                            .clone()
+                            .unwrap_or_else(|| "нет".to_string()),
+                        bottom[1].width,
+                    ),
+                    Line::from(""),
+                ])
+                .block(panel("Политика"))
+                .wrap(Wrap { trim: true }),
+                bottom[1],
+            );
+        }
+    }
+}
+
+fn render_history_responsive(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &UiSnapshot,
+    console: &ConsoleState,
+) {
+    match width_mode(area.width) {
+        WidthMode::Narrow => {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(8), Constraint::Length(9), Constraint::Min(6)])
+                .split(area);
+            frame.render_widget(
+                List::new(history_items(&snapshot.state, rows[0].width)).block(panel("Последние proxy")),
+                rows[0],
+            );
+            frame.render_widget(
+                Paragraph::new(vec![
+                    kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref()), rows[1].width),
+                    kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref()), rows[1].width),
+                    kv_line(
+                        "Current source",
+                        snapshot
+                            .state
+                            .current_proxy
+                            .as_ref()
+                            .map(|record| record.source.clone())
+                            .unwrap_or_else(|| "нет".to_string()),
+                        rows[1].width,
+                    ),
+                    kv_line("Config", snapshot.paths.config_file.display().to_string(), rows[1].width),
+                    kv_line("State", snapshot.paths.state_file.display().to_string(), rows[1].width),
+                    kv_line("Log", snapshot.paths.log_file.display().to_string(), rows[1].width),
+                ])
+                .block(panel("Хронология"))
+                .wrap(Wrap { trim: true }),
+                rows[1],
+            );
+            render_activity_panel(frame, rows[2], console);
+        }
+        _ => {
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+                .split(area);
+            frame.render_widget(
+                List::new(history_items(&snapshot.state, columns[0].width))
+                    .block(panel("Последние proxy")),
+                columns[0],
+            );
+            let right = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(10), Constraint::Min(8)])
+                .split(columns[1]);
+            frame.render_widget(
+                Paragraph::new(vec![
+                    kv_line("Last fetch", format_time(snapshot.state.last_fetch_at.as_ref()), right[0].width),
+                    kv_line("Last apply", format_time(snapshot.state.last_apply_at.as_ref()), right[0].width),
+                    kv_line(
+                        "Current source",
+                        snapshot
+                            .state
+                            .current_proxy
+                            .as_ref()
+                            .map(|record| record.source.clone())
+                            .unwrap_or_else(|| "нет".to_string()),
+                        right[0].width,
+                    ),
+                    kv_line("Config", snapshot.paths.config_file.display().to_string(), right[0].width),
+                    kv_line("State", snapshot.paths.state_file.display().to_string(), right[0].width),
+                    kv_line("Log", snapshot.paths.log_file.display().to_string(), right[0].width),
+                ])
+                .block(panel("Хронология"))
+                .wrap(Wrap { trim: true }),
+                right[0],
+            );
+            render_activity_panel(frame, right[1], console);
+        }
+    }
+}
+
+fn render_activity_panel(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    console: &ConsoleState,
+) {
+    frame.render_widget(
+        Paragraph::new(console.activity_lines_for_area(
+            area.width,
+            area.height.saturating_sub(2),
+        ))
+            .block(panel("Сигналы"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
 fn render_status_card(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -1054,17 +1794,12 @@ fn render_status_card(
 ) {
     let panel = toned_panel(title, &headline);
     let inner = panel.inner(area);
-    let headline_width = inner.width.saturating_sub(4).max(12) as usize;
-    let status_width = inner.width.saturating_sub(4).max(12) as usize;
     frame.render_widget(panel, area);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(
-                compact(&headline, headline_width),
-                semantic_style(&headline),
-            )),
+            Line::from(Span::styled(headline, semantic_style(&status))),
             Line::from(""),
-            Line::from(Span::styled(compact(&status, status_width), muted_style())),
+            Line::from(Span::styled(status, muted_style())),
         ])
         .wrap(Wrap { trim: true }),
         inner,
@@ -1126,6 +1861,7 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
 
     vec![
         Line::from(format!("Версия: {}", report.app_version)),
+        Line::from(format!("Платформа: {}", report.platform)),
         Line::from(format!("config.toml: {}", yes_no(report.config_exists))),
         Line::from(format!("state.json: {}", yes_no(report.state_exists))),
         Line::from(format!("watch.log: {}", yes_no(report.log_exists))),
@@ -1145,6 +1881,14 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
             "Telegram запущен: {}",
             yes_no(report.telegram_running)
         )),
+        Line::from(format!("Статус proxy: {}", report.current_proxy_status)),
+        Line::from(format!("Статус источника: {}", report.source_status)),
+        Line::from(format!("Статус backend: {}", report.backend_status)),
+        Line::from(format!("Путь применения: {}", report.backend_route)),
+        Line::from(format!(
+            "Нужен перезапуск Telegram: {}",
+            yes_no(report.backend_restart_required)
+        )),
         Line::from(format!(
             "Автозапуск: {}",
             if report.autostart.installed {
@@ -1160,14 +1904,14 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
             }
         )),
         Line::from(format!(
-            "Feeds: {}",
+            "Источники: {}",
             if report.enabled_sources.is_empty() {
                 "нет".to_string()
             } else {
                 report.enabled_sources.join(", ")
             }
         )),
-        Line::from(format!("Provider probe: {}", probe)),
+        Line::from(format!("Пробный fetch: {}", probe)),
     ]
 }
 
@@ -1200,13 +1944,13 @@ fn section_tabs(section: ConsoleSection) -> Line<'static> {
 fn footer_hint(section: ConsoleSection) -> &'static str {
     match section {
         ConsoleSection::Dashboard => {
-            "1-4 разделы  Tab/Left/Right  C команды  R/F5 обновить  Q выход"
+            "1-4 разделы  Tab/Left/Right  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
         }
         ConsoleSection::Actions => {
-            "Up/Down выбор  Enter запуск  S switch  W watcher  Z стоп  R/F5 обновить  Q выход"
+            "Up/Down выбор  Enter запуск  S switch  W watcher  Z стоп  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
         }
         ConsoleSection::Providers | ConsoleSection::History => {
-            "1-4 разделы  Tab/Left/Right  C команды  R/F5 обновить  Q выход"
+            "1-4 разделы  Tab/Left/Right  C команды  PgUp/PgDn сигналы  R/F5 обновить  Q выход"
         }
     }
 }
@@ -1339,8 +2083,8 @@ fn find_action(actions: &[ConsoleAction], needle: ConsoleAction) -> Option<Conso
 }
 
 fn kv_line(label: &str, value: String, width: u16) -> Line<'static> {
-    let label_width = 14usize.min(label.chars().count().max(8) + 1);
-    let value_width = width.saturating_sub(label_width as u16 + 4).max(10) as usize;
+    let label_width = label.chars().count().clamp(6, 10);
+    let value_width = width.saturating_sub(label_width as u16 + 3).max(12) as usize;
     Line::from(vec![
         Span::styled(format!("{label:<label_width$}"), muted_style()),
         Span::styled(compact(&value, value_width), text_style()),
@@ -1388,6 +2132,8 @@ fn autostart_method_label(method: &AutostartMethod) -> &'static str {
     match method {
         AutostartMethod::ScheduledTask => "scheduled_task",
         AutostartMethod::StartupFolder => "startup_folder",
+        AutostartMethod::XdgDesktop => "xdg_desktop",
+        AutostartMethod::LaunchAgent => "launch_agent",
     }
 }
 
@@ -1429,6 +2175,7 @@ fn tone_color(value: &str) -> Color {
         || lower.contains("manual")
         || lower.contains("idle")
         || lower.contains("ожид")
+        || lower.contains("перезапуск")
         || lower.contains("paused")
         || lower.contains("fallback")
         || lower.contains("switch")
@@ -1683,7 +2430,7 @@ struct SetupField {
 struct UiSnapshot {
     config: AppConfig,
     state: AppState,
-    autostart: windows::AutostartStatus,
+    autostart: platform::AutostartStatus,
     watcher_online: bool,
     paths: AppPaths,
 }
@@ -1884,6 +2631,7 @@ struct ConsoleState {
     section: ConsoleSection,
     focus: usize,
     activity: Vec<String>,
+    activity_scroll: usize,
     inspector_title: String,
     inspector_lines: Vec<Line<'static>>,
     last_seen_error: Option<String>,
@@ -1893,8 +2641,9 @@ struct ConsoleState {
 
 impl ConsoleState {
     fn push_activity(&mut self, message: String) {
+        self.activity_scroll = 0;
         self.activity.insert(0, compact(&message, 96));
-        while self.activity.len() > 8 {
+        while self.activity.len() > 24 {
             self.activity.pop();
         }
     }
@@ -1983,6 +2732,34 @@ impl ConsoleState {
             .map(|entry| Line::from(compact_to_width(entry, width, 4)))
             .collect()
     }
+
+    fn activity_lines_for_area(&self, width: u16, height: u16) -> Vec<Line<'static>> {
+        if self.activity.is_empty() {
+            return self.activity_lines(width);
+        }
+
+        let visible = height.max(2) as usize;
+        let max_scroll = self.activity.len().saturating_sub(visible);
+        let start = self.activity_scroll.min(max_scroll);
+
+        self.activity
+            .iter()
+            .skip(start)
+            .take(visible)
+            .map(|entry| Line::from(compact_to_width(entry, width, 4)))
+            .collect()
+    }
+
+    fn scroll_activity_up(&mut self) {
+        self.activity_scroll = self.activity_scroll.saturating_sub(1);
+    }
+
+    fn scroll_activity_down(&mut self) {
+        if self.activity.is_empty() {
+            return;
+        }
+        self.activity_scroll = self.activity_scroll.saturating_add(1);
+    }
 }
 
 impl Default for ConsoleState {
@@ -1991,6 +2768,7 @@ impl Default for ConsoleState {
             section: ConsoleSection::Dashboard,
             focus: 0,
             activity: Vec::new(),
+            activity_scroll: 0,
             inspector_title: "Контекст".to_string(),
             inspector_lines: Vec::new(),
             last_seen_error: None,
@@ -2021,5 +2799,144 @@ fn adjust_usize(value: &mut usize, increase: bool, min: usize, max: usize, step:
         *value = (*value + step).min(max);
     } else {
         *value = value.saturating_sub(step).max(min);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::model::{ProxyRecord, TelegramBackendMode, TelegramProxy};
+
+    #[test]
+    fn renders_narrow_dashboard_with_backend_panel() {
+        let output = render_console_text(90, 28, ConsoleSection::Dashboard);
+        assert!(output.contains("Применение"));
+        assert!(output.contains("Сессия"));
+        assert!(output.contains("Источники"));
+    }
+
+    #[test]
+    fn renders_regular_providers_with_feed_list() {
+        let output = render_console_text(120, 34, ConsoleSection::Providers);
+        assert!(output.contains("Резерв"));
+        assert!(output.contains("Ленты"));
+        assert!(output.contains("Политика"));
+    }
+
+    #[test]
+    fn renders_wide_history_with_timeline_panel() {
+        let output = render_console_text(160, 40, ConsoleSection::History);
+        assert!(output.contains("Хронология"));
+        assert!(output.contains("Последние proxy"));
+        assert!(output.contains("Сигналы"));
+    }
+
+    #[test]
+    fn activity_window_supports_scrolling() {
+        let mut console = ConsoleState::default();
+        for index in 0..12 {
+            console.push_activity(format!("signal-{index}"));
+        }
+
+        let first = console
+            .activity_lines_for_area(60, 4)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        console.scroll_activity_down();
+        console.scroll_activity_down();
+        let second = console
+            .activity_lines_for_area(60, 4)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_ne!(first, second);
+        assert!(first.contains("signal-11"));
+    }
+
+    fn render_console_text(width: u16, height: u16, section: ConsoleSection) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let snapshot = sample_snapshot();
+        let mut console = ConsoleState::default();
+        console.section = section;
+        console.push_activity("signal-one".to_string());
+        console.push_activity("signal-two".to_string());
+        console.push_activity(
+            "very long signal about pending managed restart and provider fallback".to_string(),
+        );
+        let actions = console_actions(&snapshot);
+
+        terminal
+            .draw(|frame| render_console(frame, &snapshot.paths, &snapshot, &console, &actions))
+            .unwrap();
+
+        buffer_to_string(terminal.backend().buffer())
+    }
+
+    fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
+        let area = buffer.area;
+        let mut lines = Vec::new();
+        for y in 0..area.height {
+            let mut line = String::new();
+            for x in 0..area.width {
+                line.push_str(buffer[(x, y)].symbol());
+            }
+            lines.push(line);
+        }
+        lines.join("\n")
+    }
+
+    fn sample_snapshot() -> UiSnapshot {
+        let root = tempdir().unwrap();
+        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+        let mut config = AppConfig::default();
+        config.telegram.backend_mode = TelegramBackendMode::Managed;
+        let current = ProxyRecord::new(
+            TelegramProxy::mtproto("ovh.pl.1.mtproto.ru", 443, "ee211122223333444455556666777788"),
+            "mtproto.ru",
+        );
+        let pending = ProxyRecord::new(
+            TelegramProxy::socks5("185.3.200.185", 2053, None, None),
+            "proxifly",
+        );
+        let mut state = AppState::default();
+        state.current_proxy = Some(current);
+        state.pending_proxy = Some(pending);
+        state.current_proxy_status = "proxy сохранён, ждёт перезапуска Telegram".to_string();
+        state.source_status =
+            "источник временно пуст, используем сохранённый managed proxy".to_string();
+        state.backend_status = "managed enabled / selected proxy".to_string();
+        state.backend_route =
+            "pending until restart / C:\\Users\\tester\\AppData\\Roaming\\Telegram Desktop\\tdata\\settingss"
+                .to_string();
+        state.backend_restart_required = true;
+        state.last_fetch_at = Some(Utc::now());
+        state.last_apply_at = Some(Utc::now());
+        state.watcher.mode = WatcherMode::WaitingForTelegram;
+        state.watcher.failure_streak = 2;
+        state.watcher.telegram_running = true;
+        state.watcher.last_check_at = Some(Utc::now());
+        state.watcher.next_check_at = Some(Utc::now());
+
+        UiSnapshot {
+            config,
+            state,
+            autostart: platform::AutostartStatus {
+                installed: true,
+                method: Some(AutostartMethod::StartupFolder),
+                target: Some("ProtoSwitch".to_string()),
+            },
+            watcher_online: true,
+            paths,
+        }
     }
 }
