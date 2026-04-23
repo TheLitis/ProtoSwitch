@@ -1,4 +1,6 @@
 use std::io::{self, IsTerminal};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -57,6 +59,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
     let mut last_refresh = Instant::now();
 
     loop {
+        console.poll_background_tasks();
         if console.force_refresh || last_refresh.elapsed() >= Duration::from_millis(550) {
             snapshot = UiSnapshot::load(paths)?;
             console.sync_error(&snapshot.state.last_error);
@@ -87,6 +90,13 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
         }
 
         match key.code {
+            KeyCode::F(5) => {
+                session.terminal.clear()?;
+                console.force_refresh = true;
+                console.clear_inspector();
+                console.push_activity("Экран перечитан и перерисован.".to_string());
+                continue;
+            }
             KeyCode::Left => {
                 console.section = console.section.prev();
                 continue;
@@ -111,19 +121,19 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 console.section = ConsoleSection::History;
                 continue;
             }
+            KeyCode::Char('r') => {
+                session.terminal.clear()?;
+                console.force_refresh = true;
+                console.clear_inspector();
+                console.set_result("Refresh", vec!["Снимок перечитан и экран обновлён.".to_string()]);
+                continue;
+            }
             _ => {}
         }
 
         if console.section != ConsoleSection::Actions {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
-                KeyCode::Char('r') => {
-                    console.force_refresh = true;
-                    console.set_result(
-                        "Refresh",
-                        vec!["Снимок состояния перечитан из config/state.".to_string()],
-                    );
-                }
                 KeyCode::Char('c') => {
                     console.section = ConsoleSection::Actions;
                 }
@@ -148,6 +158,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
             KeyCode::Char('p') => find_action(&actions, ConsoleAction::ApplyPending),
             KeyCode::Char('w') => find_action(&actions, ConsoleAction::WatchControl),
             KeyCode::Char('x') => find_action(&actions, ConsoleAction::StopWatcher),
+            KeyCode::Char('z') => find_action(&actions, ConsoleAction::StopAll),
             KeyCode::Char('a') => find_action(&actions, ConsoleAction::ToggleAutostart),
             KeyCode::Char('k') => find_action(&actions, ConsoleAction::ToggleAutoCleanup),
             KeyCode::Char('f') => find_action(&actions, ConsoleAction::ToggleSocks5Fallback),
@@ -213,6 +224,10 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 }
                 Err(error) => console.push_activity(format!("watcher stop: {error}")),
             },
+            ConsoleAction::StopAll => {
+                let _ = app::stop_all_protoswitch_processes(paths);
+                return Ok(());
+            }
             ConsoleAction::ToggleAutostart => {
                 let enable = !(snapshot.autostart.installed || snapshot.config.autostart.enabled);
                 match app::set_autostart_enabled(paths, enable) {
@@ -266,10 +281,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                     }
                 }
             }
-            ConsoleAction::Doctor => match app::doctor_snapshot(paths) {
-                Ok(report) => console.set_inspector("Doctor", doctor_lines(&report)),
-                Err(error) => console.push_activity(format!("doctor: {error}")),
-            },
+            ConsoleAction::Doctor => console.start_doctor(paths),
             ConsoleAction::OpenLog => match app::open_in_notepad(&paths.log_file) {
                 Ok(_) => {
                     console.set_result("Log", vec![format!("Открыт {}", paths.log_file.display())])
@@ -284,8 +296,13 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                 Err(error) => console.push_activity(format!("data: {error}")),
             },
             ConsoleAction::Refresh => {
+                session.terminal.clear()?;
                 console.force_refresh = true;
-                console.set_result("Refresh", vec!["Снимок обновлён.".to_string()]);
+                console.clear_inspector();
+                console.set_result(
+                    "Refresh",
+                    vec!["Снимок обновлён и экран перерисован.".to_string()],
+                );
             }
         }
     }
@@ -314,7 +331,7 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
         Span::raw(" "),
         Span::styled(APP_VERSION, muted_style()),
         Span::raw("  "),
-        badge("setup", Color::Rgb(118, 201, 160)),
+        badge("настройка", Color::Rgb(118, 201, 160)),
     ]))
     .block(panel("Первый запуск"));
     frame.render_widget(title, vertical[0]);
@@ -364,8 +381,8 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
         Line::from(""),
         Line::from(active.description),
         Line::from(""),
-        kv_line("Пул", draft.provider_pool()),
-        kv_line("Источники", draft.enabled_sources()),
+        kv_line("Пул", draft.provider_pool(), info_rows[0].width),
+        kv_line("Источники", draft.enabled_sources(), info_rows[0].width),
         kv_line(
             "SOCKS5 fallback",
             if draft.socks5_fallback {
@@ -373,6 +390,7 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
             } else {
                 "выключен".to_string()
             },
+            info_rows[0].width,
         ),
         kv_line(
             "Автоподчистка",
@@ -381,6 +399,7 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
             } else {
                 "выключена".to_string()
             },
+            info_rows[0].width,
         ),
     ];
     frame.render_widget(
@@ -391,10 +410,10 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
     );
 
     let summary = vec![
-        kv_line("Проверка", format!("{} сек", draft.check_interval_secs)),
-        kv_line("TCP timeout", format!("{} сек", draft.connect_timeout_secs)),
-        kv_line("Порог сбоев", draft.failure_threshold.to_string()),
-        kv_line("История proxy", draft.history_size.to_string()),
+        kv_line("Проверка", format!("{} сек", draft.check_interval_secs), info_rows[1].width),
+        kv_line("TCP timeout", format!("{} сек", draft.connect_timeout_secs), info_rows[1].width),
+        kv_line("Порог сбоев", draft.failure_threshold.to_string(), info_rows[1].width),
+        kv_line("История proxy", draft.history_size.to_string(), info_rows[1].width),
         kv_line(
             "Автозапуск",
             if draft.autostart_enabled {
@@ -402,6 +421,7 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
             } else {
                 "выключен".to_string()
             },
+            info_rows[1].width,
         ),
     ];
     frame.render_widget(
@@ -411,7 +431,7 @@ fn render_setup(frame: &mut ratatui::Frame<'_>, draft: &SetupDraft) {
         info_rows[1],
     );
 
-    let footer = Paragraph::new("↑/↓ поле  ←/→ изменить  Enter сохранить  Esc выйти")
+    let footer = Paragraph::new("Up/Down поле  Left/Right изменить  Enter сохранить  Esc выйти")
         .style(muted_style())
         .block(panel("Управление"));
     frame.render_widget(footer, vertical[2]);
@@ -444,9 +464,9 @@ fn render_console(
         Span::raw("  "),
         badge(
             if snapshot.watcher_online {
-                "watcher on"
+                "watcher активен"
             } else {
-                "watcher idle"
+                "watcher ждёт"
             },
             if snapshot.watcher_online {
                 Color::Rgb(118, 201, 160)
@@ -457,9 +477,9 @@ fn render_console(
         Span::raw(" "),
         badge(
             if snapshot.state.watcher.telegram_running {
-                "telegram on"
+                "Telegram открыт"
             } else {
-                "telegram off"
+                "Telegram закрыт"
             },
             if snapshot.state.watcher.telegram_running {
                 Color::Rgb(109, 175, 255)
@@ -470,9 +490,9 @@ fn render_console(
         Span::raw(" "),
         badge(
             if snapshot.config.provider.enable_socks5_fallback {
-                "socks5 ready"
+                "SOCKS5 готов"
             } else {
-                "mtproto only"
+                "только MTProto"
             },
             if snapshot.config.provider.enable_socks5_fallback {
                 Color::Rgb(118, 201, 160)
@@ -486,12 +506,12 @@ fn render_console(
             tone_color(&app::current_proxy_status_text(&snapshot.state)),
         ),
     ]))
-    .block(panel("Session"));
+    .block(panel("Сеанс"));
     frame.render_widget(header, vertical[0]);
 
     frame.render_widget(
         Paragraph::new(section_tabs(console.section))
-            .block(panel("Views"))
+            .block(panel("Разделы"))
             .wrap(Wrap { trim: true }),
         vertical[1],
     );
@@ -505,11 +525,9 @@ fn render_console(
         ConsoleSection::History => render_history(frame, vertical[2], snapshot, console),
     }
 
-    let footer = Paragraph::new(
-        "1-4 views  ←/→ switch view  ↑/↓ select  Enter run  S switch  P pending  W watcher  A autostart  K auto-clean  F socks5  R refresh  Q quit",
-    )
-    .style(muted_style())
-    .block(panel("Keys"));
+    let footer = Paragraph::new(footer_hint(console.section))
+        .style(muted_style())
+        .block(panel("Клавиши"));
     frame.render_widget(footer, vertical[3]);
 }
 
@@ -554,69 +572,80 @@ fn render_dashboard(
         .as_ref()
         .map(|record| protocol_style(record.proxy.kind))
         .unwrap_or_else(muted_style);
+    let route_width = hero[0].width;
+    let runtime_width = hero[1].width;
 
     let route_lines = vec![
         Line::from(vec![
             Span::styled("Current  ", muted_style()),
             Span::styled(
-                snapshot
-                    .state
-                    .current_proxy
-                    .as_ref()
-                    .map(|record| record.proxy.short_label())
-                    .unwrap_or_else(|| "не выбран".to_string()),
+                compact_to_width(
+                    &snapshot
+                        .state
+                        .current_proxy
+                        .as_ref()
+                        .map(|record| record.proxy.short_label())
+                        .unwrap_or_else(|| "не выбран".to_string()),
+                    route_width,
+                    14,
+                ),
                 current_proxy_style,
             ),
         ]),
         Line::from(vec![
             Span::styled("Status   ", muted_style()),
             Span::styled(
-                compact(&app::current_proxy_status_text(&snapshot.state), 54),
+                compact_to_width(&app::current_proxy_status_text(&snapshot.state), route_width, 14),
                 semantic_style(&app::current_proxy_status_text(&snapshot.state)),
             ),
         ]),
         Line::from(vec![
             Span::styled("Source   ", muted_style()),
             Span::styled(
-                snapshot
-                    .state
-                    .current_proxy
-                    .as_ref()
-                    .map(|record| record.source.clone())
-                    .unwrap_or_else(|| "ещё не закреплён".to_string()),
+                compact_to_width(
+                    &snapshot
+                        .state
+                        .current_proxy
+                        .as_ref()
+                        .map(|record| record.source.clone())
+                        .unwrap_or_else(|| "ещё не закреплён".to_string()),
+                    route_width,
+                    14,
+                ),
                 text_style(),
             ),
         ]),
         Line::from(vec![
             Span::styled("Pending  ", muted_style()),
             Span::styled(
-                snapshot
-                    .state
-                    .pending_proxy
-                    .as_ref()
-                    .map(|record| record.proxy.short_label())
-                    .unwrap_or_else(|| "пусто".to_string()),
+                compact_to_width(
+                    &snapshot
+                        .state
+                        .pending_proxy
+                        .as_ref()
+                        .map(|record| record.proxy.short_label())
+                        .unwrap_or_else(|| "пусто".to_string()),
+                    route_width,
+                    14,
+                ),
                 pending_style,
             ),
         ]),
-        Line::from(vec![
-            Span::styled("Last apply  ", muted_style()),
-            Span::styled(
-                format_time(snapshot.state.last_apply_at.as_ref()),
-                text_style(),
-            ),
-            Span::raw("    "),
-            Span::styled("Last fetch  ", muted_style()),
-            Span::styled(
-                format_time(snapshot.state.last_fetch_at.as_ref()),
-                text_style(),
-            ),
-        ]),
+        kv_line(
+            "Last apply",
+            format_time(snapshot.state.last_apply_at.as_ref()),
+            route_width,
+        ),
+        kv_line(
+            "Last fetch",
+            format_time(snapshot.state.last_fetch_at.as_ref()),
+            route_width,
+        ),
     ];
     frame.render_widget(
         Paragraph::new(route_lines)
             .block(toned_panel(
-                "Route",
+                "Proxy",
                 &app::current_proxy_status_text(&snapshot.state),
             ))
             .wrap(Wrap { trim: true }),
@@ -632,6 +661,7 @@ fn render_dashboard(
                 snapshot.state.watcher.failure_streak,
                 snapshot.config.watcher.failure_threshold
             ),
+            runtime_width,
         ),
         kv_line(
             "Telegram",
@@ -640,14 +670,17 @@ fn render_dashboard(
             } else {
                 "не запущен".to_string()
             },
+            runtime_width,
         ),
         kv_line(
             "Source state",
-            compact(&app::source_status_text(&snapshot.state), 32),
+            app::source_status_text(&snapshot.state),
+            runtime_width,
         ),
         kv_line(
             "Next check",
             format_time(snapshot.state.watcher.next_check_at.as_ref()),
+            runtime_width,
         ),
         kv_line(
             "Autostart",
@@ -662,6 +695,7 @@ fn render_dashboard(
             } else {
                 "выключен".to_string()
             },
+            runtime_width,
         ),
         kv_line(
             "Auto-clean",
@@ -670,12 +704,13 @@ fn render_dashboard(
             } else {
                 "выключен".to_string()
             },
+            runtime_width,
         ),
     ];
     frame.render_widget(
         Paragraph::new(runtime_lines)
             .block(toned_panel(
-                "Runtime",
+                "Среда",
                 &app::source_status_text(&snapshot.state),
             ))
             .wrap(Wrap { trim: true }),
@@ -695,7 +730,7 @@ fn render_dashboard(
     render_gauge_card(
         frame,
         middle[0],
-        "Watcher health",
+        "Здоровье watcher",
         failure_ratio,
         &format!(
             "{}/{} failures",
@@ -710,7 +745,7 @@ fn render_dashboard(
     render_gauge_card(
         frame,
         middle[1],
-        "Provider mix",
+        "Состав источников",
         mtproto_count as f64 / total_sources,
         &app::provider_pool_summary(&snapshot.config),
         &format!("{socks5_count} SOCKS5 source(s) active"),
@@ -727,15 +762,15 @@ fn render_dashboard(
     render_gauge_card(
         frame,
         middle[2],
-        "Readiness",
+        "Готовность",
         ready_count as f64 / 3.0,
         &format!("{ready_count}/3 ready"),
-        &compact(&app::enabled_sources_summary(&snapshot.config), 34),
+        &compact_to_width(&app::enabled_sources_summary(&snapshot.config), middle[2].width, 10),
     );
 
     frame.render_widget(
-        Paragraph::new(console.activity_lines())
-            .block(panel("Signals"))
+        Paragraph::new(console.activity_lines(rows[2].width))
+            .block(panel("Сигналы"))
             .wrap(Wrap { trim: true }),
         rows[2],
     );
@@ -765,14 +800,14 @@ fn render_actions(
                 text_style()
             };
             ListItem::new(Line::from(vec![
-                Span::styled(if selected { "› " } else { "  " }, style),
+                Span::styled(if selected { "> " } else { "  " }, style),
                 Span::styled(action.label(snapshot), style),
                 Span::raw("  "),
                 Span::styled(action.shortcut(), muted_style()),
             ]))
         })
         .collect::<Vec<_>>();
-    frame.render_widget(List::new(action_items).block(panel("Actions")), columns[0]);
+    frame.render_widget(List::new(action_items).block(panel("Команды")), columns[0]);
 
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -792,8 +827,8 @@ fn render_actions(
     );
 
     frame.render_widget(
-        Paragraph::new(console.activity_lines())
-            .block(panel("Activity"))
+        Paragraph::new(console.activity_lines(right[1].width))
+            .block(panel("Сигналы"))
             .wrap(Wrap { trim: true }),
         right[1],
     );
@@ -822,15 +857,15 @@ fn render_providers(
     render_status_card(
         frame,
         top[0],
-        "Pool",
+        "Пул",
         app::provider_pool_summary(&snapshot.config),
         app::enabled_sources_summary(&snapshot.config),
     );
     render_status_card(
         frame,
         top[1],
-        "Source state",
-        compact(&app::source_status_text(&snapshot.state), 26),
+        "Состояние источника",
+        compact_to_width(&app::source_status_text(&snapshot.state), top[1].width, 6),
         snapshot
             .state
             .current_proxy
@@ -856,7 +891,7 @@ fn render_providers(
         .split(rows[1]);
 
     frame.render_widget(
-        List::new(provider_source_items(snapshot)).block(panel("Built-in feeds")),
+        List::new(provider_source_items(snapshot, bottom[0].width)).block(panel("Встроенные ленты")),
         bottom[0],
     );
 
@@ -864,14 +899,17 @@ fn render_providers(
         kv_line(
             "Fetch tries",
             snapshot.config.provider.fetch_attempts.to_string(),
+            bottom[1].width,
         ),
         kv_line(
             "Retry delay",
             format!("{} ms", snapshot.config.provider.fetch_retry_delay_ms),
+            bottom[1].width,
         ),
         kv_line(
             "Active feeds",
             snapshot.config.provider.active_sources().len().to_string(),
+            bottom[1].width,
         ),
         kv_line(
             "Current source",
@@ -881,6 +919,7 @@ fn render_providers(
                 .as_ref()
                 .map(|record| record.source.clone())
                 .unwrap_or_else(|| "ещё не закреплён".to_string()),
+            bottom[1].width,
         ),
         kv_line(
             "Last error",
@@ -888,18 +927,19 @@ fn render_providers(
                 .state
                 .last_error
                 .as_ref()
-                .map(|value| compact(value, 34))
+                .map(|value| value.to_string())
                 .unwrap_or_else(|| "нет".to_string()),
+            bottom[1].width,
         ),
         Line::from(""),
         Line::from(Span::styled("Signals", title_style())),
     ]
     .into_iter()
-    .chain(console.activity_lines())
+    .chain(console.activity_lines(bottom[1].width))
     .collect::<Vec<_>>();
     frame.render_widget(
         Paragraph::new(provider_lines)
-            .block(panel("Provider policy"))
+            .block(panel("Политика источников"))
             .wrap(Wrap { trim: true }),
         bottom[1],
     );
@@ -917,7 +957,7 @@ fn render_history(
         .split(area);
 
     frame.render_widget(
-        List::new(history_items(&snapshot.state)).block(panel("Recent proxies")),
+        List::new(history_items(&snapshot.state, columns[0].width)).block(panel("Последние proxy")),
         columns[0],
     );
 
@@ -930,10 +970,12 @@ fn render_history(
         kv_line(
             "Last fetch",
             format_time(snapshot.state.last_fetch_at.as_ref()),
+            right[0].width,
         ),
         kv_line(
             "Last apply",
             format_time(snapshot.state.last_apply_at.as_ref()),
+            right[0].width,
         ),
         kv_line(
             "Current source",
@@ -943,20 +985,21 @@ fn render_history(
                 .as_ref()
                 .map(|record| record.source.clone())
                 .unwrap_or_else(|| "нет".to_string()),
+            right[0].width,
         ),
-        kv_line("Config", snapshot.paths.config_file.display().to_string()),
-        kv_line("State", snapshot.paths.state_file.display().to_string()),
-        kv_line("Log", snapshot.paths.log_file.display().to_string()),
+        kv_line("Config", snapshot.paths.config_file.display().to_string(), right[0].width),
+        kv_line("State", snapshot.paths.state_file.display().to_string(), right[0].width),
+        kv_line("Log", snapshot.paths.log_file.display().to_string(), right[0].width),
     ];
     frame.render_widget(
         Paragraph::new(detail)
-            .block(panel("Timeline"))
+            .block(panel("Хронология"))
             .wrap(Wrap { trim: true }),
         right[0],
     );
     frame.render_widget(
-        Paragraph::new(console.activity_lines())
-            .block(panel("Signals"))
+        Paragraph::new(console.activity_lines(right[1].width))
+            .block(panel("Сигналы"))
             .wrap(Wrap { trim: true }),
         right[1],
     );
@@ -971,15 +1014,17 @@ fn render_status_card(
 ) {
     let panel = toned_panel(title, &headline);
     let inner = panel.inner(area);
+    let headline_width = inner.width.saturating_sub(4).max(12) as usize;
+    let status_width = inner.width.saturating_sub(4).max(12) as usize;
     frame.render_widget(panel, area);
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
-                compact(&headline, 34),
+                compact(&headline, headline_width),
                 semantic_style(&headline),
             )),
             Line::from(""),
-            Line::from(Span::styled(compact(&status, 42), muted_style())),
+            Line::from(Span::styled(compact(&status, status_width), muted_style())),
         ])
         .wrap(Wrap { trim: true }),
         inner,
@@ -996,6 +1041,8 @@ fn render_gauge_card(
 ) {
     let panel = toned_panel(title, status);
     let inner = panel.inner(area);
+    let label_width = inner.width.saturating_sub(18).max(10) as usize;
+    let status_width = inner.width.saturating_sub(24).max(8) as usize;
     frame.render_widget(panel, area);
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1007,9 +1054,9 @@ fn render_gauge_card(
         .split(inner);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(compact(label, 28), title_style()),
+            Span::styled(compact(label, label_width), title_style()),
             Span::raw("  "),
-            Span::styled(compact(status, 18), semantic_style(status)),
+            Span::styled(compact(status, status_width), semantic_style(status)),
         ]))
         .wrap(Wrap { trim: true }),
         rows[0],
@@ -1086,10 +1133,10 @@ fn doctor_lines(report: &app::DoctorSnapshot) -> Vec<Line<'static>> {
 
 fn section_tabs(section: ConsoleSection) -> Line<'static> {
     let sections = [
-        (ConsoleSection::Dashboard, "Dashboard"),
-        (ConsoleSection::Actions, "Actions"),
-        (ConsoleSection::Providers, "Providers"),
-        (ConsoleSection::History, "History"),
+        (ConsoleSection::Dashboard, "Обзор"),
+        (ConsoleSection::Actions, "Команды"),
+        (ConsoleSection::Providers, "Источники"),
+        (ConsoleSection::History, "История"),
     ];
 
     let mut spans = Vec::new();
@@ -1110,6 +1157,20 @@ fn section_tabs(section: ConsoleSection) -> Line<'static> {
     Line::from(spans)
 }
 
+fn footer_hint(section: ConsoleSection) -> &'static str {
+    match section {
+        ConsoleSection::Dashboard => {
+            "1-4 разделы  Tab/Left/Right  C команды  R/F5 обновить  Q выход"
+        }
+        ConsoleSection::Actions => {
+            "Up/Down выбор  Enter запуск  S switch  W watcher  Z стоп  R/F5 обновить  Q выход"
+        }
+        ConsoleSection::Providers | ConsoleSection::History => {
+            "1-4 разделы  Tab/Left/Right  C команды  R/F5 обновить  Q выход"
+        }
+    }
+}
+
 fn action_description_lines(
     action: ConsoleAction,
     snapshot: &UiSnapshot,
@@ -1122,7 +1183,7 @@ fn action_description_lines(
         .collect()
 }
 
-fn history_items(state: &AppState) -> Vec<ListItem<'static>> {
+fn history_items(state: &AppState, width: u16) -> Vec<ListItem<'static>> {
     if state.recent_proxies.is_empty() {
         return vec![ListItem::new(Line::from(vec![
             Span::styled("• ", muted_style()),
@@ -1141,10 +1202,13 @@ fn history_items(state: &AppState) -> Vec<ListItem<'static>> {
                         format!("{} ", record.proxy.protocol_label()),
                         protocol_style(record.proxy.kind),
                     ),
-                    Span::styled(record.proxy.short_label(), text_style()),
+                    Span::styled(
+                        compact_to_width(&record.proxy.short_label(), width, 10),
+                        text_style(),
+                    ),
                 ]),
                 Line::from(vec![
-                    Span::styled(compact(&record.source, 30), muted_style()),
+                    Span::styled(compact_to_width(&record.source, width, 18), muted_style()),
                     Span::raw("  "),
                     Span::styled(format_record_time(record.captured_at), muted_style()),
                 ]),
@@ -1153,7 +1217,7 @@ fn history_items(state: &AppState) -> Vec<ListItem<'static>> {
         .collect()
 }
 
-fn provider_source_items(snapshot: &UiSnapshot) -> Vec<ListItem<'static>> {
+fn provider_source_items(snapshot: &UiSnapshot, width: u16) -> Vec<ListItem<'static>> {
     snapshot
         .config
         .provider
@@ -1162,12 +1226,12 @@ fn provider_source_items(snapshot: &UiSnapshot) -> Vec<ListItem<'static>> {
         .map(|source| {
             let status = if source.enabled {
                 if source.kind.is_socks5() && !snapshot.config.provider.enable_socks5_fallback {
-                    "paused by fallback"
+                    "ждёт fallback"
                 } else {
-                    "active"
+                    "активен"
                 }
             } else {
-                "disabled"
+                "выключен"
             };
             let protocol = if source.kind.is_socks5() {
                 Span::styled(
@@ -1187,11 +1251,14 @@ fn provider_source_items(snapshot: &UiSnapshot) -> Vec<ListItem<'static>> {
             ListItem::new(vec![
                 Line::from(vec![
                     protocol,
-                    Span::styled(source.name.clone(), text_style()),
+                    Span::styled(compact_to_width(&source.name, width, 18), text_style()),
                     Span::raw("  "),
                     Span::styled(status, semantic_style(status)),
                 ]),
-                Line::from(Span::styled(compact(&source.url, 70), muted_style())),
+                Line::from(Span::styled(
+                    compact_to_width(&source.url, width, 6),
+                    muted_style(),
+                )),
             ])
         })
         .collect()
@@ -1202,6 +1269,7 @@ fn console_actions(snapshot: &UiSnapshot) -> Vec<ConsoleAction> {
         ConsoleAction::SwitchNow,
         ConsoleAction::WatchControl,
         ConsoleAction::StopWatcher,
+        ConsoleAction::StopAll,
         ConsoleAction::ToggleAutostart,
         ConsoleAction::ToggleAutoCleanup,
         ConsoleAction::ToggleSocks5Fallback,
@@ -1230,11 +1298,19 @@ fn find_action(actions: &[ConsoleAction], needle: ConsoleAction) -> Option<Conso
     actions.iter().copied().find(|action| *action == needle)
 }
 
-fn kv_line(label: &str, value: String) -> Line<'static> {
+fn kv_line(label: &str, value: String, width: u16) -> Line<'static> {
+    let label_width = 14usize.min(label.chars().count().max(8) + 1);
+    let value_width = width
+        .saturating_sub(label_width as u16 + 4)
+        .max(10) as usize;
     Line::from(vec![
-        Span::styled(format!("{label:<16}"), muted_style()),
-        Span::styled(compact(&value, 54), text_style()),
+        Span::styled(format!("{label:<label_width$}"), muted_style()),
+        Span::styled(compact(&value, value_width), text_style()),
     ])
+}
+
+fn compact_to_width(value: &str, width: u16, reserve: u16) -> String {
+    compact(value, width.saturating_sub(reserve).max(10) as usize)
 }
 
 fn compact(value: &str, max: usize) -> String {
@@ -1623,6 +1699,7 @@ enum ConsoleAction {
     ApplyPending,
     WatchControl,
     StopWatcher,
+    StopAll,
     ToggleAutostart,
     ToggleAutoCleanup,
     ToggleSocks5Fallback,
@@ -1637,43 +1714,44 @@ enum ConsoleAction {
 impl ConsoleAction {
     fn label(&self, snapshot: &UiSnapshot) -> &'static str {
         match self {
-            ConsoleAction::SwitchNow => "switch now",
-            ConsoleAction::ApplyPending => "apply pending",
+            ConsoleAction::SwitchNow => "сменить proxy сейчас",
+            ConsoleAction::ApplyPending => "применить pending",
             ConsoleAction::WatchControl => {
                 if snapshot.watcher_online {
-                    "restart watcher"
+                    "перезапустить watcher"
                 } else {
-                    "start watcher"
+                    "запустить watcher"
                 }
             }
-            ConsoleAction::StopWatcher => "stop watcher",
+            ConsoleAction::StopWatcher => "остановить watcher",
+            ConsoleAction::StopAll => "стоп и выход",
             ConsoleAction::ToggleAutostart => {
                 if snapshot.autostart.installed || snapshot.config.autostart.enabled {
-                    "disable autostart"
+                    "выключить автозапуск"
                 } else {
-                    "enable autostart"
+                    "включить автозапуск"
                 }
             }
             ConsoleAction::ToggleAutoCleanup => {
                 if snapshot.config.watcher.auto_cleanup_dead_proxies {
-                    "disable auto-clean"
+                    "выключить автоподчистку"
                 } else {
-                    "enable auto-clean"
+                    "включить автоподчистку"
                 }
             }
             ConsoleAction::ToggleSocks5Fallback => {
                 if snapshot.config.provider.enable_socks5_fallback {
-                    "disable socks5 fallback"
+                    "только MTProto"
                 } else {
-                    "enable socks5 fallback"
+                    "включить SOCKS5 fallback"
                 }
             }
-            ConsoleAction::Settings => "settings",
-            ConsoleAction::Doctor => "doctor",
-            ConsoleAction::OpenLog => "open log",
-            ConsoleAction::OpenDataDir => "open data folder",
-            ConsoleAction::Refresh => "refresh snapshot",
-            ConsoleAction::Exit => "quit",
+            ConsoleAction::Settings => "настройки",
+            ConsoleAction::Doctor => "диагностика",
+            ConsoleAction::OpenLog => "открыть лог",
+            ConsoleAction::OpenDataDir => "открыть папку данных",
+            ConsoleAction::Refresh => "обновить экран",
+            ConsoleAction::Exit => "выход",
         }
     }
 
@@ -1683,6 +1761,7 @@ impl ConsoleAction {
             ConsoleAction::ApplyPending => "[P]",
             ConsoleAction::WatchControl => "[W]",
             ConsoleAction::StopWatcher => "[X]",
+            ConsoleAction::StopAll => "[Z]",
             ConsoleAction::ToggleAutostart => "[A]",
             ConsoleAction::ToggleAutoCleanup => "[K]",
             ConsoleAction::ToggleSocks5Fallback => "[F]",
@@ -1713,6 +1792,10 @@ impl ConsoleAction {
             ConsoleAction::StopWatcher => {
                 vec!["Остановить только фоновые headless watcher-процессы ProtoSwitch.".to_string()]
             }
+            ConsoleAction::StopAll => vec![
+                "Остановить все остальные процессы ProtoSwitch и закрыть текущую консоль.".to_string(),
+                "Подходит, если нужно полностью остановить приложение перед переустановкой или ручной проверкой.".to_string(),
+            ],
             ConsoleAction::ToggleAutostart => vec![if snapshot.autostart.installed
                 || snapshot.config.autostart.enabled
             {
@@ -1767,11 +1850,12 @@ struct ConsoleState {
     inspector_lines: Vec<Line<'static>>,
     last_seen_error: Option<String>,
     force_refresh: bool,
+    doctor_job: Option<Receiver<Result<app::DoctorSnapshot, String>>>,
 }
 
 impl ConsoleState {
     fn push_activity(&mut self, message: String) {
-        self.activity.insert(0, message);
+        self.activity.insert(0, compact(&message, 96));
         while self.activity.len() > 8 {
             self.activity.pop();
         }
@@ -1791,6 +1875,53 @@ impl ConsoleState {
         self.push_activity(format!("{title}: снимок обновлён"));
     }
 
+    fn clear_inspector(&mut self) {
+        self.inspector_title = "Контекст".to_string();
+        self.inspector_lines.clear();
+    }
+
+    fn start_doctor(&mut self, paths: &AppPaths) {
+        if self.doctor_job.is_some() {
+            self.push_activity("doctor: диагностика уже выполняется".to_string());
+            return;
+        }
+
+        let (sender, receiver) = mpsc::channel();
+        let job_paths = paths.clone();
+        self.doctor_job = Some(receiver);
+        self.inspector_title = "Диагностика".to_string();
+        self.inspector_lines = vec![
+            Line::from("Диагностика выполняется в фоне."),
+            Line::from("Можно переключать view и обновлять экран."),
+        ];
+        self.push_activity("doctor: диагностика запущена".to_string());
+        thread::spawn(move || {
+            let _ = sender.send(app::doctor_snapshot(&job_paths).map_err(|error| error.to_string()));
+        });
+    }
+
+    fn poll_background_tasks(&mut self) {
+        let Some(receiver) = self.doctor_job.as_ref() else {
+            return;
+        };
+
+        match receiver.try_recv() {
+            Ok(Ok(report)) => {
+                self.doctor_job = None;
+                self.set_inspector("Диагностика", doctor_lines(&report));
+            }
+            Ok(Err(error)) => {
+                self.doctor_job = None;
+                self.push_activity(format!("doctor: {error}"));
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.doctor_job = None;
+                self.push_activity("doctor: фоновая задача прервалась".to_string());
+            }
+        }
+    }
+
     fn sync_error(&mut self, error: &Option<String>) {
         if self.last_seen_error != *error {
             if let Some(value) = error {
@@ -1800,7 +1931,7 @@ impl ConsoleState {
         }
     }
 
-    fn activity_lines(&self) -> Vec<Line<'static>> {
+    fn activity_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.activity.is_empty() {
             return vec![
                 Line::from("Интерфейс готов."),
@@ -1808,7 +1939,10 @@ impl ConsoleState {
             ];
         }
 
-        self.activity.iter().cloned().map(Line::from).collect()
+        self.activity
+            .iter()
+            .map(|entry| Line::from(compact_to_width(entry, width, 4)))
+            .collect()
     }
 }
 
@@ -1818,10 +1952,11 @@ impl Default for ConsoleState {
             section: ConsoleSection::Dashboard,
             focus: 0,
             activity: Vec::new(),
-            inspector_title: "Context".to_string(),
+            inspector_title: "Контекст".to_string(),
             inspector_lines: Vec::new(),
             last_seen_error: None,
             force_refresh: false,
+            doctor_job: None,
         }
     }
 }

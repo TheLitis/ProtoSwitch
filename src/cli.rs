@@ -19,6 +19,8 @@ pub enum Commands {
     Switch(SwitchArgs),
     Cleanup,
     Doctor(DoctorArgs),
+    Repair,
+    Shutdown,
     Autostart {
         #[command(subcommand)]
         command: AutostartCommand,
@@ -98,5 +100,11 @@ mod tests {
                 json: false
             }))
         ));
+    }
+
+    #[test]
+    fn parses_shutdown_command() {
+        let cli = Cli::parse_from(["protoswitch", "shutdown"]);
+        assert!(matches!(cli.command, Some(Commands::Shutdown)));
     }
 }
