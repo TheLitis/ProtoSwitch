@@ -55,27 +55,23 @@ def portable_archive(repo_root: Path, version: str, platform_name: str, arch: st
     )
 
 
-def expected_paths(
+def expected_autostart_path(
     home: Path,
     platform_name: str,
     xdg_config_home: Path | None,
-    xdg_data_home: Path | None,
-) -> tuple[Path, Path, Path]:
+) -> Path:
     if platform_name == "linux":
         config_home = xdg_config_home or home / ".config"
-        data_home = xdg_data_home or home / ".local" / "share"
-        return (
-            config_home / "ProtoSwitch" / "config.toml",
-            data_home / "ProtoSwitch" / "state.json",
-            config_home / "autostart" / "protoswitch.desktop",
-        )
+        return config_home / "autostart" / "protoswitch.desktop"
 
-    app_support = home / "Library" / "Application Support" / "ProtoSwitch"
-    return (
-        app_support / "config.toml",
-        app_support / "state.json",
-        home / "Library" / "LaunchAgents" / "com.thelitis.protoswitch.plist",
-    )
+    return home / "Library" / "LaunchAgents" / "com.thelitis.protoswitch.plist"
+
+
+def extract_reported_path(output: str, label: str) -> Path:
+    match = re.search(rf"(?m)^{re.escape(label)}:\s+(.+)$", output)
+    if not match:
+        raise SystemExit(f"{label} path not found in command output")
+    return Path(match.group(1).strip())
 
 
 def main() -> None:
@@ -121,7 +117,7 @@ def main() -> None:
             )
 
         run([str(binary), "--version"], env)
-        run([str(binary), "init", "--non-interactive", "--no-autostart"], env)
+        init_output = run([str(binary), "init", "--non-interactive", "--no-autostart"], env)
         status_output = run([str(binary), "status", "--plain"], env)
         doctor_output = run([str(binary), "doctor"], env)
         assert_no_mojibake(status_output, "status")
@@ -129,12 +125,9 @@ def main() -> None:
         if "Статус proxy" not in status_output:
             raise SystemExit("Portable smoke expected plain status output.")
 
-        config_path, state_path, autostart_path = expected_paths(
-            home,
-            args.platform,
-            xdg_config_home,
-            xdg_data_home,
-        )
+        config_path = extract_reported_path(init_output, "config.toml")
+        state_path = extract_reported_path(init_output, "state.json")
+        autostart_path = expected_autostart_path(home, args.platform, xdg_config_home)
         if not config_path.exists():
             raise SystemExit(f"Config file not found after init: {config_path}")
         if not state_path.exists():
