@@ -2181,23 +2181,23 @@ fn provider_source_items(snapshot: &UiSnapshot, width: u16) -> Vec<ListItem<'sta
 
 fn console_actions(snapshot: &UiSnapshot) -> Vec<ConsoleAction> {
     let mut actions = vec![
+        ConsoleAction::Refresh,
         ConsoleAction::SwitchNow,
+        ConsoleAction::Settings,
         ConsoleAction::WatchControl,
-        ConsoleAction::StopWatcher,
-        ConsoleAction::StopAll,
         ConsoleAction::ToggleAutostart,
         ConsoleAction::ToggleAutoCleanup,
-        ConsoleAction::ToggleSocks5Fallback,
-        ConsoleAction::Settings,
         ConsoleAction::Doctor,
         ConsoleAction::OpenLog,
         ConsoleAction::OpenDataDir,
-        ConsoleAction::Refresh,
+        ConsoleAction::ToggleSocks5Fallback,
+        ConsoleAction::StopWatcher,
+        ConsoleAction::StopAll,
         ConsoleAction::Exit,
     ];
 
     if snapshot.state.pending_proxy.is_some() && snapshot.state.watcher.telegram_running {
-        actions.insert(1, ConsoleAction::ApplyPending);
+        actions.insert(2, ConsoleAction::ApplyPending);
     }
 
     if !(snapshot.autostart.installed
@@ -2685,7 +2685,7 @@ impl ConsoleSection {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConsoleAction {
     SwitchNow,
     ApplyPending,
@@ -2706,43 +2706,43 @@ enum ConsoleAction {
 impl ConsoleAction {
     fn label(&self, snapshot: &UiSnapshot) -> &'static str {
         match self {
-            ConsoleAction::SwitchNow => "сменить proxy сейчас",
-            ConsoleAction::ApplyPending => "применить pending",
+            ConsoleAction::SwitchNow => "найти новый proxy сейчас",
+            ConsoleAction::ApplyPending => "применить уже найденный proxy",
             ConsoleAction::WatchControl => {
                 if snapshot.watcher_online {
-                    "перезапустить watcher"
+                    "авторежим: перезапустить watcher"
                 } else {
-                    "запустить watcher"
+                    "авторежим: запустить watcher"
                 }
             }
-            ConsoleAction::StopWatcher => "остановить watcher",
-            ConsoleAction::StopAll => "стоп и выход",
+            ConsoleAction::StopWatcher => "остановить только watcher",
+            ConsoleAction::StopAll => "полностью остановить ProtoSwitch",
             ConsoleAction::ToggleAutostart => {
                 if snapshot.autostart.installed || snapshot.config.autostart.enabled {
-                    "выключить автозапуск"
+                    "автозапуск: выключить"
                 } else {
-                    "включить автозапуск"
+                    "автозапуск: включить"
                 }
             }
             ConsoleAction::ToggleAutoCleanup => {
                 if snapshot.config.watcher.auto_cleanup_dead_proxies {
-                    "выключить автоподчистку"
+                    "автоподчистка: выключить"
                 } else {
-                    "включить автоподчистку"
+                    "автоподчистка: включить"
                 }
             }
             ConsoleAction::ToggleSocks5Fallback => {
                 if snapshot.config.provider.enable_socks5_fallback {
-                    "только MTProto"
+                    "источники: только MTProto"
                 } else {
-                    "включить SOCKS5 fallback"
+                    "источники: добавить SOCKS5"
                 }
             }
-            ConsoleAction::Settings => "настройки",
+            ConsoleAction::Settings => "быстрые настройки",
             ConsoleAction::Doctor => "диагностика",
             ConsoleAction::OpenLog => "открыть лог",
             ConsoleAction::OpenDataDir => "открыть папку данных",
-            ConsoleAction::Refresh => "обновить экран",
+            ConsoleAction::Refresh => "обновить состояние",
             ConsoleAction::Exit => "выход",
         }
     }
@@ -2769,8 +2769,8 @@ impl ConsoleAction {
     fn description(&self, snapshot: &UiSnapshot, paths: &AppPaths) -> Vec<String> {
         match self {
             ConsoleAction::SwitchNow => vec![
-                "Сразу запросить нового кандидата из встроенного пула источников и применить его в Telegram.".to_string(),
-                "После auto-confirm ProtoSwitch дополнительно проверяет видимый статус proxy внутри Telegram.".to_string(),
+                "Сразу запросить нового кандидата из встроенного пула источников и сохранить его в Telegram.".to_string(),
+                "Если Telegram уже открыт, ProtoSwitch старается не мешать работе и использует тихий managed-flow.".to_string(),
             ],
             ConsoleAction::ApplyPending => vec![
                 "Применить уже сохранённый pending proxy без нового fetch.".to_string(),
@@ -2810,12 +2810,16 @@ impl ConsoleAction {
             ],
             ConsoleAction::Doctor => vec![
                 "Проверить tg:// handler, Telegram Desktop, provider pool, state/config/logs и автозапуск.".to_string(),
+                "Диагностика идёт в фоне, поэтому интерфейс не зависает во время проверки.".to_string(),
             ],
             ConsoleAction::OpenLog => vec![format!("Открыть watch.log: {}", paths.log_file.display())],
             ConsoleAction::OpenDataDir => {
                 vec![format!("Открыть рабочую папку: {}", paths.local_dir.display())]
             }
-            ConsoleAction::Refresh => vec!["Перечитать status snapshot без побочных действий.".to_string()],
+            ConsoleAction::Refresh => vec![
+                "Перечитать status snapshot без побочных действий.".to_string(),
+                "Полезно, если хочется быстро перепроверить экран после фонового изменения состояния.".to_string(),
+            ],
             ConsoleAction::Exit => vec![
                 format!(
                     "Закрыть интерфейс. Watcher {}.",
@@ -3179,5 +3183,24 @@ mod tests {
         assert!(rendered.contains("Итог"));
         assert!(rendered.contains("Фон"));
         assert!(rendered.contains("сохранён тихо") || rendered.contains("перезапуска Telegram"));
+    }
+
+    #[test]
+    fn prioritizes_daily_console_actions() {
+        let actions = console_actions(&sample_snapshot());
+
+        assert_eq!(actions[0], ConsoleAction::Refresh);
+        assert_eq!(actions[1], ConsoleAction::SwitchNow);
+        assert_eq!(actions[2], ConsoleAction::ApplyPending);
+        assert!(
+            actions
+                .iter()
+                .position(|action| *action == ConsoleAction::Doctor)
+                .unwrap()
+                < actions
+                    .iter()
+                    .position(|action| *action == ConsoleAction::StopAll)
+                    .unwrap()
+        );
     }
 }
