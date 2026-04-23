@@ -429,6 +429,7 @@ pub struct AppState {
     pub source_status: String,
     pub backend_status: String,
     pub backend_route: String,
+    pub backend_restart_required: bool,
     pub watcher: WatcherSnapshot,
     pub recent_proxies: VecDeque<ProxyRecord>,
     pub last_error: Option<String>,
@@ -482,6 +483,7 @@ impl AppState {
     pub fn mark_healthy(&mut self) {
         self.watcher.failure_streak = 0;
         self.last_error = None;
+        self.backend_restart_required = false;
         self.current_proxy_status = "работает".to_string();
     }
 

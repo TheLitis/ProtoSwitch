@@ -331,6 +331,7 @@ fn watch_cycle(
 ) -> anyhow::Result<String> {
     let mut state = AppState::load(paths)?;
     let now = Utc::now();
+    let previous_telegram_running = state.watcher.telegram_running;
     let telegram_running = telegram::is_running().unwrap_or(false);
     state.watcher.telegram_running = telegram_running;
     state.watcher.last_check_at = Some(now);
@@ -346,6 +347,32 @@ fn watch_cycle(
     }
     if state.source_status.trim().is_empty() {
         state.set_source_status("источник ещё не опрашивался");
+    }
+    if state.backend_restart_required {
+        if !previous_telegram_running && telegram_running {
+            state.backend_restart_required = false;
+            state.set_backend_status("managed override adopted after restart");
+        } else {
+            state.watcher.mode = WatcherMode::WaitingForTelegram;
+            state.watcher.failure_streak = 0;
+            state.set_current_proxy_status(if telegram_running {
+                "proxy сохранён, ждёт перезапуска Telegram"
+            } else {
+                "proxy сохранён, ждёт запуска Telegram"
+            });
+            if state.source_status.trim().is_empty() {
+                state.set_source_status("managed override записан в settingss");
+            }
+            state.save(&paths.state_file)?;
+            return Ok(if headless {
+                String::new()
+            } else if telegram_running {
+                "Proxy сохранён в Telegram settings. Нужен перезапуск Telegram.".to_string()
+            } else {
+                "Proxy сохранён в Telegram settings и применится при следующем запуске Telegram."
+                    .to_string()
+            });
+        }
     }
     if state.current_proxy.is_none() {
         state.watcher.mode = WatcherMode::Idle;
@@ -730,6 +757,18 @@ fn backend_status_text(
     state: &AppState,
     managed: Option<&telegram::ManagedSettingsStatus>,
 ) -> String {
+    if state.backend_restart_required {
+        let waiting = if state.watcher.telegram_running {
+            "ждёт перезапуска Telegram"
+        } else {
+            "ждёт следующего запуска Telegram"
+        };
+        if !state.backend_status.trim().is_empty() {
+            return format!("{} / {}", state.backend_status, waiting);
+        }
+        return waiting.to_string();
+    }
+
     if !state.backend_status.trim().is_empty() {
         return state.backend_status.clone();
     }
@@ -743,6 +782,10 @@ fn backend_route_text(
     state: &AppState,
     managed: Option<&telegram::ManagedSettingsStatus>,
 ) -> String {
+    if state.backend_restart_required && !state.backend_route.trim().is_empty() {
+        return format!("pending until restart / {}", state.backend_route);
+    }
+
     if !state.backend_route.trim().is_empty() {
         return state.backend_route.clone();
     }
@@ -802,6 +845,7 @@ fn cleanup_dead_proxies_in_state(
         .unwrap_or(false)
     {
         state.current_proxy = None;
+        state.backend_restart_required = false;
         state.set_current_proxy_status("не выбран");
     }
     if state
@@ -912,6 +956,7 @@ fn store_apply_failure(
     let _ =
         telegram::cleanup_managed_proxies(&config.telegram, std::slice::from_ref(&record.proxy));
     state.pending_proxy = None;
+    state.backend_restart_required = false;
     state.watcher.mode = WatcherMode::Error;
     state.watcher.failure_streak = config.watcher.failure_threshold;
     state.last_error = Some(error_message);
@@ -936,10 +981,13 @@ fn apply_proxy_record(
     state.push_recent(record.clone(), config.watcher.history_size);
     let managed_owned = state.recent_proxy_values();
 
-    if !matches!(
-        config.telegram.backend_mode,
-        crate::model::TelegramBackendMode::Manual
-    ) {
+    let use_managed_backend = !allow_fallback
+        || !matches!(
+            config.telegram.backend_mode,
+            crate::model::TelegramBackendMode::Manual
+        );
+
+    if use_managed_backend {
         let managed = match telegram::apply_managed_proxy(
             &config.telegram,
             &record.proxy,
@@ -977,17 +1025,27 @@ fn apply_proxy_record(
             }
         };
 
-        state.set_backend_status(format!(
-            "managed {} / {}",
-            managed.settings_status.mode_label, managed.settings_status.selected_label
-        ));
-        state.set_backend_route(managed.settings_path.display().to_string());
+        if managed.used_fallback {
+            state.backend_restart_required = false;
+            state.set_backend_status("manual fallback через Telegram UI");
+            state.set_backend_route(format!("manual fallback -> {}", record.proxy.deep_link()));
+        } else {
+            state.set_backend_status(format!(
+                "managed {} / {}",
+                managed.settings_status.mode_label, managed.settings_status.selected_label
+            ));
+            state.set_backend_route(format!(
+                "managed settings -> {}",
+                managed.settings_path.display()
+            ));
+        }
 
         if !managed.immediate {
             state.current_proxy = Some(record.clone());
             state.pending_proxy = None;
             state.last_fetch_at.get_or_insert(record.captured_at);
             state.last_apply_at = Some(Utc::now());
+            state.backend_restart_required = state.watcher.telegram_running;
             state.watcher.mode = WatcherMode::WaitingForTelegram;
             state.watcher.failure_streak = 0;
             state.last_error = None;
@@ -1043,8 +1101,9 @@ fn apply_proxy_record(
             record.proxy.short_label()
         ));
     } else {
-        state.set_backend_status("manual tg://proxy apply");
-        state.set_backend_route(record.proxy.deep_link());
+        state.backend_restart_required = false;
+        state.set_backend_status("manual tg:// apply");
+        state.set_backend_route(format!("manual fallback -> {}", record.proxy.deep_link()));
     }
 
     let telegram_status =
