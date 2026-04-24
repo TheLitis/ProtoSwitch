@@ -415,7 +415,6 @@ fn watch_cycle(
             record,
             "Использован сохранённый pending proxy".to_string(),
             "Отложенный proxy применён",
-            false,
         ) {
             Ok(message) => return Ok(message),
             Err(error) => {
@@ -448,7 +447,6 @@ fn watch_cycle(
         provider,
         &mut state,
         "Watcher переключил proxy",
-        false,
     ) {
         Ok(message) => Ok(if headless { String::new() } else { message }),
         Err(error) => {
@@ -864,7 +862,11 @@ pub(crate) fn backend_status_text(
             "ждёт следующего запуска Telegram"
         };
         if !state.backend_status.trim().is_empty() {
-            return format!("{} / {}", normalize_backend_status(&state.backend_status), waiting);
+            return format!(
+                "{} / {}",
+                normalize_backend_status(&state.backend_status),
+                waiting
+            );
         }
         return waiting.to_string();
     }
@@ -1014,15 +1016,6 @@ pub(crate) fn cleanup_dead_proxies(paths: &AppPaths) -> anyhow::Result<String> {
     })
 }
 
-fn try_cleanup_dead_proxies(paths: &AppPaths, config: &AppConfig, state: &mut AppState) {
-    if !config.watcher.auto_cleanup_dead_proxies {
-        return;
-    }
-    if let Err(error) = cleanup_dead_proxies_in_state(paths, config, state) {
-        let _ = paths.append_log(format!("telegram cleanup skipped: {error}"));
-    }
-}
-
 pub(crate) fn load_status_snapshot(
     paths: &AppPaths,
 ) -> anyhow::Result<(AppConfig, AppState, platform::AutostartStatus)> {
@@ -1119,263 +1112,84 @@ fn apply_proxy_record(
     record: ProxyRecord,
     source_status: String,
     success_prefix: &str,
-    allow_fallback: bool,
 ) -> anyhow::Result<String> {
     state.push_recent(record.clone(), config.watcher.history_size);
     let managed_owned = state.recent_proxy_values();
 
-    let use_managed_backend = !allow_fallback
-        || !matches!(
-            config.telegram.backend_mode,
-            crate::model::TelegramBackendMode::Manual
-        );
-
-    if use_managed_backend {
-        let managed = match telegram::apply_managed_proxy(
-            &config.telegram,
-            &record.proxy,
-            &managed_owned,
-            config.watcher.auto_cleanup_dead_proxies,
-            allow_fallback,
-            config.watcher.connect_timeout_secs,
-        ) {
-            Ok(result) => result,
-            Err(error) => {
-                let details = error.to_string();
-                store_apply_failure(
-                    paths,
-                    config,
-                    state,
-                    &record,
-                    ApplyFailureState {
-                        current_status: format!(
-                            "Managed backend не смог записать proxy: {details}"
-                        ),
-                        source_status: format!(
-                            "Источник дал кандидата {}, но managed backend завершился ошибкой: {details}",
-                            record.proxy.short_label()
-                        ),
-                        error_message: format!(
-                            "Managed backend не смог записать proxy: {}",
-                            record.proxy.short_label()
-                        ),
-                        log_message: format!(
-                            "managed backend отклонил proxy {}: {details}",
-                            record.proxy.short_label()
-                        ),
-                    },
-                )?;
-                return Err(anyhow::anyhow!(
-                    "Managed backend не смог записать proxy: {} ({details})",
-                    record.proxy.short_label()
-                ));
-            }
-        };
-
-        if managed.used_fallback {
-            state.backend_restart_required = false;
-            state.set_backend_status("ручной fallback через Telegram UI");
-            state.set_backend_route(format!("ручной fallback -> {}", record.proxy.deep_link()));
-        } else if let Some(details) = managed.fallback_error.as_ref() {
-            state.backend_restart_required = state.watcher.telegram_running;
-            state.set_backend_status("ручной fallback недоступен");
-            state.set_backend_route(format!("settingss -> {}", managed.settings_path.display()));
-            let _ = paths.append_log(format!(
-                "manual fallback unavailable for {}: {details}",
+    let managed = match telegram::apply_managed_proxy(
+        &config.telegram,
+        &record.proxy,
+        &managed_owned,
+        config.watcher.auto_cleanup_dead_proxies,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            let details = error.to_string();
+            store_apply_failure(
+                paths,
+                config,
+                state,
+                &record,
+                ApplyFailureState {
+                    current_status: format!("Managed backend не смог записать proxy: {details}"),
+                    source_status: format!(
+                        "Источник дал кандидата {}, но managed backend завершился ошибкой: {details}",
+                        record.proxy.short_label()
+                    ),
+                    error_message: format!(
+                        "Managed backend не смог записать proxy: {}",
+                        record.proxy.short_label()
+                    ),
+                    log_message: format!(
+                        "managed backend отклонил proxy {}: {details}",
+                        record.proxy.short_label()
+                    ),
+                },
+            )?;
+            return Err(anyhow::anyhow!(
+                "Managed backend не смог записать proxy: {} ({details})",
                 record.proxy.short_label()
             ));
-        } else {
-            state.set_backend_status(managed_backend_summary(
-                &managed.settings_status.mode_label,
-                &managed.settings_status.selected_label,
-                managed.settings_status.rotation_enabled,
-            ));
-            state.set_backend_route(format!("settingss -> {}", managed.settings_path.display()));
         }
+    };
 
-        if !managed.immediate {
-            state.current_proxy = Some(record.clone());
-            state.pending_proxy = None;
-            state.last_fetch_at.get_or_insert(record.captured_at);
-            state.last_apply_at = Some(Utc::now());
-            state.backend_restart_required = false;
-            state.watcher.mode = WatcherMode::Watching;
-            state.watcher.failure_streak = 0;
-            state.last_error = None;
-            state.set_current_proxy_status(if managed.fallback_error.is_some() {
-                "proxy сохранён в settingss, ручной fallback недоступен"
-            } else if state.watcher.telegram_running {
-                "proxy записан в Telegram settings"
-            } else {
-                "proxy сохранён в Telegram settings"
-            });
-            state.set_source_status(source_status);
-            state.save(&paths.state_file)?;
-            paths.append_log(format!(
-                "proxy сохранён в settingss: {} -> {}",
-                record.proxy.short_label(),
-                managed.settings_path.display()
-            ))?;
-            return Ok(if state.watcher.telegram_running {
-                format!(
-                    "{success_prefix}: {} ({})",
-                    record.proxy.short_label(),
-                    if managed.fallback_error.is_some() {
-                        "сохранён в settingss, ручной fallback недоступен"
-                    } else {
-                        "записан в Telegram settings"
-                    }
-                )
-            } else {
-                format!(
-                    "{success_prefix}: {} (записан в Telegram settings)",
-                    record.proxy.short_label()
-                )
-            });
-        }
-    } else if let Err(error) =
-        telegram::open_proxy_link(&record.proxy, config.watcher.connect_timeout_secs)
-    {
-        let details = error.to_string();
-        store_apply_failure(
-            paths,
-            config,
-            state,
-            &record,
-            ApplyFailureState {
-                current_status: format!("Telegram не подтвердил добавление proxy: {details}"),
-                source_status: format!(
-                    "Источник дал кандидата {}, но диалог Telegram завершился ошибкой: {details}",
-                    record.proxy.short_label()
-                ),
-                error_message: format!(
-                    "Telegram не подтвердил добавление proxy: {}",
-                    record.proxy.short_label()
-                ),
-                log_message: format!(
-                    "telegram dialog rejected proxy {} with error {details}",
-                    record.proxy.short_label()
-                ),
-            },
-        )?;
-        return Err(anyhow::anyhow!(
-            "Telegram не подтвердил добавление proxy: {}",
-            record.proxy.short_label()
-        ));
+    state.set_backend_status(managed_backend_summary(
+        &managed.settings_status.mode_label,
+        &managed.settings_status.selected_label,
+        managed.settings_status.rotation_enabled,
+    ));
+    state.set_backend_route(format!("settingss -> {}", managed.settings_path.display()));
+    state.current_proxy = Some(record.clone());
+    state.pending_proxy = None;
+    state.last_fetch_at.get_or_insert(record.captured_at);
+    state.last_apply_at = Some(Utc::now());
+    state.backend_restart_required = false;
+    state.watcher.mode = WatcherMode::Watching;
+    state.watcher.failure_streak = 0;
+    state.last_error = None;
+    state.set_current_proxy_status(if state.watcher.telegram_running {
+        "proxy записан в Telegram settings"
     } else {
-        state.backend_restart_required = false;
-        state.set_backend_status("ручной tg:// apply");
-        state.set_backend_route(format!("ручной fallback -> {}", record.proxy.deep_link()));
-    }
-
-    let telegram_status =
-        telegram::settle_proxy_status(&record.proxy, config.watcher.connect_timeout_secs)?;
-    match telegram_status {
-        telegram::ManagedProxyStatus::Unavailable(details) => {
-            store_apply_failure(
-                paths,
-                config,
-                state,
-                &record,
-                ApplyFailureState {
-                    current_status: format!("Telegram отклонил proxy: {details}"),
-                    source_status: format!(
-                        "Источник дал кандидата {}, но Telegram показал статус: {details}",
-                        record.proxy.short_label()
-                    ),
-                    error_message: format!(
-                        "Telegram пометил proxy как недоступный: {}",
-                        record.proxy.short_label()
-                    ),
-                    log_message: format!(
-                        "telegram rejected proxy {} with status {details}",
-                        record.proxy.short_label()
-                    ),
-                },
-            )?;
-            Err(anyhow::anyhow!(
-                "Telegram пометил proxy как недоступный: {}",
-                record.proxy.short_label()
-            ))
-        }
-        telegram::ManagedProxyStatus::Available(details) => {
-            state.current_proxy = Some(record.clone());
-            state.pending_proxy = None;
-            state.last_fetch_at.get_or_insert(record.captured_at);
-            state.last_apply_at = Some(Utc::now());
-            state.watcher.mode = WatcherMode::Switching;
-            state.watcher.telegram_running = true;
-            state.watcher.failure_streak = 0;
-            state.last_error = None;
-            state.set_current_proxy_status(format!("подключён, Telegram: {details}"));
-            state.set_source_status(source_status);
-            if state.backend_status.trim().is_empty() {
-                state.set_backend_status("live apply через Telegram UI");
-            }
-            try_cleanup_dead_proxies(paths, config, state);
-            state.save(&paths.state_file)?;
-            paths.append_log(format!(
-                "proxy applied {} with telegram status {details}",
-                record.proxy.short_label()
-            ))?;
-            Ok(format!("{success_prefix}: {}", record.proxy.short_label()))
-        }
-        telegram::ManagedProxyStatus::Checking(details)
-        | telegram::ManagedProxyStatus::Unknown(details) => {
-            store_apply_failure(
-                paths,
-                config,
-                state,
-                &record,
-                ApplyFailureState {
-                    current_status: format!("Telegram не подтвердил подключение proxy: {details}"),
-                    source_status: format!(
-                        "Источник дал кандидата {}, но Telegram не подтвердил подключение: {details}",
-                        record.proxy.short_label()
-                    ),
-                    error_message: format!(
-                        "Telegram не подтвердил подключение proxy: {}",
-                        record.proxy.short_label()
-                    ),
-                    log_message: format!(
-                        "telegram did not settle proxy {} and returned status {details}",
-                        record.proxy.short_label()
-                    ),
-                },
-            )?;
-            Err(anyhow::anyhow!(
-                "Telegram не подтвердил подключение proxy: {}",
-                record.proxy.short_label()
-            ))
-        }
-        telegram::ManagedProxyStatus::Missing => {
-            store_apply_failure(
-                paths,
-                config,
-                state,
-                &record,
-                ApplyFailureState {
-                    current_status: "Telegram не сохранил proxy в списке".to_string(),
-                    source_status: format!(
-                        "Источник дал кандидата {}, но Telegram не сохранил proxy",
-                        record.proxy.short_label()
-                    ),
-                    error_message: format!(
-                        "Telegram не сохранил proxy: {}",
-                        record.proxy.short_label()
-                    ),
-                    log_message: format!(
-                        "telegram did not persist proxy {} after apply",
-                        record.proxy.short_label()
-                    ),
-                },
-            )?;
-            Err(anyhow::anyhow!(
-                "Telegram не сохранил proxy: {}",
-                record.proxy.short_label()
-            ))
-        }
-    }
+        "proxy сохранён в Telegram settings"
+    });
+    state.set_source_status(source_status);
+    state.save(&paths.state_file)?;
+    paths.append_log(format!(
+        "proxy сохранён в settingss: {} -> {}",
+        record.proxy.short_label(),
+        managed.settings_path.display()
+    ))?;
+    Ok(if state.watcher.telegram_running {
+        format!(
+            "{success_prefix}: {} (записан в Telegram settings)",
+            record.proxy.short_label()
+        )
+    } else {
+        format!(
+            "{success_prefix}: {} (сохранён в Telegram settings)",
+            record.proxy.short_label()
+        )
+    })
 }
 
 fn apply_candidate_with_retries(
@@ -1384,7 +1198,6 @@ fn apply_candidate_with_retries(
     provider: &MtProtoProvider,
     state: &mut AppState,
     success_prefix: &str,
-    allow_fallback: bool,
 ) -> anyhow::Result<String> {
     let mut rejected = state.recent_proxy_values();
     let attempts = config.watcher.history_size.clamp(3, 6);
@@ -1406,7 +1219,6 @@ fn apply_candidate_with_retries(
             record.clone(),
             format!("Найден рабочий proxy: {}", record.proxy.short_label()),
             success_prefix,
-            allow_fallback,
         ) {
             Ok(message) => return Ok(message),
             Err(error) => {
@@ -1436,14 +1248,7 @@ pub(crate) fn switch_to_candidate(paths: &AppPaths, dry_run: bool) -> anyhow::Re
     if dry_run {
         return Ok(format!("Новый proxy: {}", record.proxy.deep_link()));
     }
-    apply_candidate_with_retries(
-        paths,
-        &config,
-        &provider,
-        &mut state,
-        "Применён proxy",
-        false,
-    )
+    apply_candidate_with_retries(paths, &config, &provider, &mut state, "Применён proxy")
 }
 
 pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
@@ -1459,7 +1264,6 @@ pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
         record,
         "Использован сохранённый pending proxy".to_string(),
         "Отложенный proxy применён",
-        false,
     )
 }
 

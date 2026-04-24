@@ -112,8 +112,8 @@ data_dir = ""
 `backend_mode`:
 
 - `managed` — только запись в `settingss`;
-- `hybrid` — managed path по умолчанию, live fallback только для явных ручных действий;
-- `manual` — без фонового live-apply watcher всё равно остаётся silent-only.
+- `hybrid` — managed path по умолчанию без `tg://`-диалога;
+- `manual` — legacy-режим в конфиге, в beta.4 пользовательские команды всё равно не открывают окно подтверждения Telegram.
 
 Каталоги данных:
 
@@ -140,7 +140,6 @@ data_dir = ""
 
 - поддерживается только `Telegram Desktop`;
 - Linux/macOS уже проходят portable-first smoke в CI, но всё ещё идут без native installer;
-- фоновый watcher не открывает `tg://`-диалог и не нажимает кнопки в Telegram; live-поведение опирается на managed settings и Telegram proxy rotation;
-- live fallback остаётся только для явных ручных действий `switch` и `repair`, и статус честно покажет, если fallback недоступен;
+- фоновый watcher и ручной `switch` не открывают `tg://`-диалог и не нажимают кнопки в Telegram; поведение опирается на managed settings и Telegram proxy rotation;
 - live Windows e2e остаётся opt-in локальным сценарием и не запускается в CI на реальном пользовательском Telegram;
 - бесплатные proxy и сами публичные источники по природе нестабильны, поэтому приложение всё ещё остаётся beta, а не stable.

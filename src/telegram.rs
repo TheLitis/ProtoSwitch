@@ -12,7 +12,7 @@ use anyhow::Context;
 use anyhow::anyhow;
 use sysinfo::{ProcessesToUpdate, System};
 
-use crate::model::{MtProtoProxy, ProxyKind, TelegramBackendMode, TelegramConfig};
+use crate::model::{MtProtoProxy, ProxyKind, TelegramConfig};
 use crate::tdesktop::{
     DesktopProxyMode, DesktopProxySettings, detect_telegram_data_dir, load_proxy_settings,
     resolve_telegram_data_dir, write_proxy_settings_override,
@@ -26,6 +26,7 @@ use winreg::RegKey;
 use winreg::enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 #[cfg_attr(not(windows), allow(dead_code))]
 pub enum ManagedProxyStatus {
     Available(String),
@@ -48,9 +49,6 @@ pub struct ManagedSettingsStatus {
 pub struct ManagedApplyResult {
     pub settings_path: PathBuf,
     pub settings_status: ManagedSettingsStatus,
-    pub immediate: bool,
-    pub used_fallback: bool,
-    pub fallback_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -103,6 +101,7 @@ pub fn check_proxy(proxy: &MtProtoProxy, timeout_secs: u64) -> bool {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 pub fn open_proxy_link(proxy: &MtProtoProxy, timeout_secs: u64) -> anyhow::Result<()> {
     let output =
         run_hidden_powershell_output(&apply_proxy_command(&proxy.deep_link(), timeout_secs))
@@ -116,11 +115,13 @@ pub fn open_proxy_link(proxy: &MtProtoProxy, timeout_secs: u64) -> anyhow::Resul
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 pub fn open_proxy_link(_proxy: &MtProtoProxy, _timeout_secs: u64) -> anyhow::Result<()> {
     Err(anyhow!("Поддерживается только Windows"))
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 pub fn probe_proxy_status(
     proxy: &MtProtoProxy,
     timeout_secs: u64,
@@ -138,6 +139,7 @@ pub fn probe_proxy_status(
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 pub fn probe_proxy_status(
     _proxy: &MtProtoProxy,
     _timeout_secs: u64,
@@ -145,6 +147,7 @@ pub fn probe_proxy_status(
     Err(anyhow!("Поддерживается только Windows"))
 }
 
+#[allow(dead_code)]
 pub fn settle_proxy_status(
     proxy: &MtProtoProxy,
     timeout_secs: u64,
@@ -202,8 +205,6 @@ pub fn apply_managed_proxy(
     proxy: &MtProtoProxy,
     owned: &[MtProtoProxy],
     cleanup_owned: bool,
-    allow_ui_fallback: bool,
-    timeout_secs: u64,
 ) -> anyhow::Result<ManagedApplyResult> {
     let mut settings =
         load_proxy_settings(config).unwrap_or_else(|_| DesktopProxySettings::default());
@@ -220,36 +221,9 @@ pub fn apply_managed_proxy(
         rotation_enabled: settings.proxy_rotation_enabled,
     };
 
-    if matches!(config.backend_mode, TelegramBackendMode::Managed) || !is_running().unwrap_or(false)
-    {
-        return Ok(ManagedApplyResult {
-            settings_path,
-            settings_status,
-            immediate: false,
-            used_fallback: false,
-            fallback_error: None,
-        });
-    }
-
-    if allow_ui_fallback {
-        let fallback_error = open_proxy_link(proxy, timeout_secs)
-            .err()
-            .map(|error| error.to_string());
-        return Ok(ManagedApplyResult {
-            settings_path,
-            settings_status,
-            immediate: fallback_error.is_none(),
-            used_fallback: fallback_error.is_none(),
-            fallback_error,
-        });
-    }
-
     Ok(ManagedApplyResult {
         settings_path,
         settings_status,
-        immediate: false,
-        used_fallback: false,
-        fallback_error: None,
     })
 }
 
@@ -350,6 +324,7 @@ fn check_socks5_proxy(proxy: &MtProtoProxy, timeout: Duration) -> bool {
 }
 
 #[cfg(any(windows, test))]
+#[allow(dead_code)]
 fn parse_probe_status_line(line: &str) -> anyhow::Result<ManagedProxyStatus> {
     let Some((kind, value)) = line.split_once(':') else {
         return Err(anyhow!("Не удалось разобрать статус Telegram proxy"));
@@ -455,6 +430,7 @@ fn with_utf8_powershell(script: &str) -> String {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn apply_proxy_command(value: &str, timeout_secs: u64) -> String {
     let timeout_ms = (timeout_secs.max(3) + 4).saturating_mul(1_000).to_string();
     let script = r#"$ErrorActionPreference = 'Stop'
@@ -705,6 +681,7 @@ exit 2"#;
 }
 
 #[cfg(all(windows, test))]
+#[allow(dead_code)]
 fn probe_proxy_status_command(proxy: &MtProtoProxy, timeout_secs: u64) -> String {
     let timeout_ms = (timeout_secs.max(3) + 3).saturating_mul(1_000).to_string();
     let script = r#"$ErrorActionPreference = 'Stop'
@@ -1221,6 +1198,7 @@ exit 0"#;
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn probe_proxy_status_command_v2(proxy: &MtProtoProxy, timeout_secs: u64) -> String {
     let timeout_ms = (timeout_secs.max(3) + 3).saturating_mul(1_000).to_string();
     let script = r#"$ErrorActionPreference = 'Stop'
