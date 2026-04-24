@@ -59,7 +59,7 @@ function Test-StartupShortcut {
 }
 
 function Test-ScheduledTask {
-    $taskName = 'ProtoSwitch Watcher'
+    $taskName = 'ProtoSwitch'
     $process = Start-Process -FilePath 'cmd.exe' `
         -ArgumentList '/c', "schtasks /Query /TN ""$taskName"" >nul 2>&1" `
         -Wait `

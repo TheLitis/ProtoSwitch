@@ -235,7 +235,7 @@ pub fn run_status(paths: &AppPaths) -> anyhow::Result<()> {
                         vec![if stopped == 0 {
                             "Фоновый watcher не найден.".to_string()
                         } else {
-                            format!("Остановлено headless watcher-процессов: {stopped}")
+                            format!("Остановлено процессов watcher: {stopped}")
                         }],
                     )
                 }
@@ -2677,13 +2677,13 @@ impl SetupDraft {
                 description: "Сколько последних proxy хранить, чтобы не вернуться мгновенно на тот же адрес.",
             },
             SetupField {
-                label: "Автозапуск watcher",
+                label: "Автозапуск индикатора",
                 value: if self.autostart_enabled {
                     "включён".to_string()
                 } else {
                     "выключен".to_string()
                 },
-                description: "Запускать headless watcher при логине Windows.",
+                description: "Запускать системный индикатор ProtoSwitch и watcher при логине.",
             },
             SetupField {
                 label: "Автоподчистка",
@@ -2730,8 +2730,7 @@ struct UiSnapshot {
 impl UiSnapshot {
     fn load(paths: &AppPaths) -> anyhow::Result<Self> {
         let (config, state, autostart) = app::load_status_snapshot(paths)?;
-        let watcher_online =
-            app::watcher_process_exists() || app::watcher_is_recent(&config, &state);
+        let watcher_online = app::watcher_process_exists();
         Ok(Self {
             config,
             state,

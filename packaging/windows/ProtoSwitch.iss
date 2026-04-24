@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.2.0-beta.3"
+  #define AppVersion "0.2.0-beta.4"
 #endif
 #ifndef RepoRoot
   #error RepoRoot must be defined.
@@ -43,7 +43,7 @@ SetupIconFile={#RepoRoot}\assets\windows\protoswitch.ico
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
-Name: "autostart"; Description: "Включить автозапуск watcher"
+Name: "autostart"; Description: "Включить автозапуск индикатора ProtoSwitch"
 
 [Files]
 Source: "{#ReleaseDir}\protoswitch.exe"; DestDir: "{app}"; Flags: ignoreversion

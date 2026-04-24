@@ -1,6 +1,6 @@
 ﻿# ProtoSwitch
 
-**ProtoSwitch v0.2.0-beta.3** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и записывает managed proxy в настройки Telegram без popup и без focus stealing.
+**ProtoSwitch v0.2.0-beta.4** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и записывает managed proxy в настройки Telegram без popup и без focus stealing.
 
 ## Что Есть Сейчас
 
@@ -8,7 +8,7 @@
 - adaptive TUI с режимами `Обзор`, `Команды`, `Источники`, `История`;
 - индикатор в системной области через `protoswitch tray`;
 - managed backend для `tdata/settingss`, чтобы не засорять Telegram случайными нерабочими адресами;
-- manual fallback для явного `switch` и `repair`, если нужен live-сценарий;
+- ручной `switch` для немедленного поиска и записи managed proxy;
 - structured UTF-8 логи без старого `String::from_utf8_lossy`-хаоса;
 - детерминированный watcher e2e-слой внутри репозитория и отдельный opt-in live Windows smoke;
 - Windows installer + portable-артефакты для Windows, Linux и macOS;
@@ -48,7 +48,7 @@ flowchart TD
 - `active` — текущий managed proxy проходит проверку и остаётся рабочим.
 - `saved to managed settings` — replacement proxy уже сохранён в `settingss`.
 - `source empty / no free proxies` — источник сейчас пуст или временно не смог выдать новый proxy.
-- `manual fallback unavailable` — live fallback сейчас не сработал, но managed settings уже записаны и не потеряны.
+- `managed settings` — proxy записан в настройки Telegram без открытия отдельного окна подтверждения.
 
 ## Надёжность И E2E
 

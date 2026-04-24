@@ -2,7 +2,7 @@
 
 Этот файл нужен только для выпуска релизов ProtoSwitch.
 
-## Что Должно Попасть В `v0.2.0-beta.3`
+## Что Должно Попасть В `v0.2.0-beta.4`
 
 - `ProtoSwitch-Setup-x64.exe`
 - `protoswitch-portable-win-x64.zip`
@@ -21,7 +21,7 @@
 4. Соберите Windows-артефакты локально:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-distribution.ps1`
 5. Прогоните portable smoke:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-portable.ps1 -Version 0.2.0-beta.3`
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-portable.ps1 -Version 0.2.0-beta.4`
 6. Прогоните installer smoke на чистой Windows-сессии:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-installer.ps1 -Mode CurrentUser`
 7. Если нужна machine-wide проверка, используйте повышенный PowerShell:
@@ -29,12 +29,12 @@
 8. Для ручной live-проверки на реальном Telegram Desktop используйте opt-in сценарий:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\e2e-windows-live.ps1 -ConfirmLiveMutation`
 9. Linux/macOS portable smoke идёт через CI-скрипт:
-   `python3 scripts/smoke-unix.py --repo-root <repo> --version 0.2.0-beta.3 --platform linux --arch x64`
+   `python3 scripts/smoke-unix.py --repo-root <repo> --version 0.2.0-beta.4 --platform linux --arch x64`
 
 ## Основной Путь Публикации
 
 1. Закоммитьте релизные изменения.
-2. Создайте подписанный тег `v0.2.0-beta.3`.
+2. Создайте подписанный тег `v0.2.0-beta.4`.
 3. Запушьте `main` и тег.
 4. GitHub Actions workflow `.github/workflows/release.yml` сам:
    - проверит наличие записи в `CHANGELOG.md`;

@@ -1440,9 +1440,6 @@ pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
     let Some(record) = state.pending_proxy.clone() else {
         return Err(anyhow::anyhow!("Нет pending proxy для применения"));
     };
-    if !telegram::is_running().unwrap_or(false) {
-        return Err(anyhow::anyhow!("Telegram Desktop сейчас не запущен"));
-    }
     let config = AppConfig::load(paths)?;
     apply_proxy_record(
         paths,
@@ -1451,7 +1448,7 @@ pub(crate) fn apply_pending_proxy(paths: &AppPaths) -> anyhow::Result<String> {
         record,
         "Использован сохранённый pending proxy".to_string(),
         "Отложенный proxy применён",
-        true,
+        false,
     )
 }
 
@@ -1576,10 +1573,7 @@ fn persist_config_with_restart(
 }
 
 pub(crate) fn ensure_watcher_running(paths: &AppPaths) -> anyhow::Result<bool> {
-    let config = AppConfig::load(paths)?;
-    let state = AppState::load(paths)?;
-
-    if watcher_is_recent(&config, &state) || watcher_process_exists() {
+    if watcher_process_exists() {
         return Ok(false);
     }
 
@@ -1690,7 +1684,7 @@ pub(crate) fn repair_installation(paths: &AppPaths) -> anyhow::Result<String> {
     };
 
     Ok(format!(
-        "{saved}. Остановлено watcher-процессов: {stopped}. tg:// handler: {}. {}.",
+        "{saved}. Остановлено процессов watcher: {stopped}. tg:// handler: {}. {}.",
         if doctor.tg_protocol_handler.is_some() {
             "найден"
         } else {
