@@ -2,13 +2,35 @@
 
 Все заметные изменения проекта ProtoSwitch будут отражаться в этом файле.
 
+## [v0.2.0-beta.4] - 2026-04-24
+
+Beta-релиз для пользовательского фонового сценария: ProtoSwitch получил системный индикатор, автозапуск теперь поднимает tray-mode, а watcher при открытом Telegram продолжает managed rotation без popup, без захвата фокуса и без состояния `waiting_for_restart`.
+
+### Added
+
+- Добавлена команда `protoswitch tray` с индикатором в системной области Windows/Linux и menu bar на macOS.
+- В tray-menu добавлены быстрые действия: найти новый proxy, перезапустить watcher, остановить ProtoSwitch и скрыть индикатор.
+
+### Changed
+
+- Автозапуск теперь стартует `protoswitch tray`, чтобы у пользователя был видимый фоновый индикатор.
+- Managed apply при открытом Telegram больше не переводит состояние в `waiting_for_restart`: ProtoSwitch записывает proxy в `settingss`, включает Telegram proxy rotation и продолжает watcher-цикл.
+- Первый запуск watcher теперь сам ищет и записывает рабочий proxy, а не ждёт ручной `switch`.
+- Ручной `switch` больше не открывает `tg://` fallback: команда работает через managed settings, как и фоновый watcher.
+- Главный экран TUI стал короче: убраны спорные формулировки и отдельная перегружающая панель.
+- Документация и quickstart обновлены под tray-mode и managed rotation.
+
+### Notes
+
+- Tray на Linux зависит от поддержки appindicator/tray в конкретном desktop environment.
+- Live-переключение не использует `tg://`-диалог и не нажимает кнопки в Telegram; фоновый путь работает через managed settings и Telegram proxy rotation.
+
 ## [v0.2.0-beta.3] - 2026-04-23
 
 Beta-релиз для закрытия watcher e2e-хвоста: ProtoSwitch теперь имеет детерминированный sandbox e2e-набор для managed watcher-flow, отдельный opt-in live Windows smoke для реального Telegram Desktop и release-gate, который не даёт упаковке Windows пройти без зелёного watcher e2e.
 
 ### Added
 
-- Добавлена команда `protoswitch tray` с индикатором в системной области Windows/Linux и menu bar на macOS.
 - Добавлен internal test seam для детерминированного состояния `Telegram запущен / не запущен` внутри crate-level e2e.
 - Добавлены sandbox helper-ы для реального roundtrip `tdata/settingss` через текущий `tdesktop` serializer.
 - Добавлен crate-level watcher e2e suite с локальными HTTP/TCP fixture-серверами и проверками `state.json`, `doctor --json`, `status --json` и managed `settingss`.
@@ -16,8 +38,6 @@ Beta-релиз для закрытия watcher e2e-хвоста: ProtoSwitch т
 
 ### Changed
 
-- Автозапуск теперь стартует `protoswitch tray`, чтобы у пользователя был видимый фоновый индикатор.
-- Managed apply при открытом Telegram больше не переводит состояние в `waiting_for_restart`: ProtoSwitch записывает proxy в `settingss`, включает Telegram proxy rotation и продолжает watcher-цикл.
 - Watcher e2e теперь покрывает сценарии `healthy current proxy`, `pending when Telegram closed`, `managed apply when Telegram open`, `dead first candidate / live second candidate` и `source empty / no free proxies`.
 - CI release workflow блокирует Windows packaging на зелёном deterministic watcher e2e job.
 - `tdesktop` data-dir override стал терпимее к sandbox путям и legacy `settings`, чтобы e2e мог валидировать реальный бинарный формат без подмены файлового layout.
@@ -25,7 +45,7 @@ Beta-релиз для закрытия watcher e2e-хвоста: ProtoSwitch т
 
 ### Notes
 
-- Критерий фонового успеха для открытого Telegram теперь шире: managed settings обновлены, rotation включён, `tg://` popup не открывается.
+- Критерий успеха для уже открытого Telegram не изменился: watcher по-прежнему считает фоновым успехом только запись в managed settings до следующего запуска клиента, а не true live-switch.
 - Live Windows smoke остаётся локальным opt-in сценарием и не меняет CI-контракт для Linux/macOS.
 
 ## [v0.2.0-beta.2] - 2026-04-23
@@ -50,12 +70,12 @@ Beta-релиз hardening-очереди: Windows-friendly UTF-8 доведён 
 
 ### Notes
 
-- Контракт для уже открытого Telegram не изменился: watcher по-прежнему использует только `silent save + next launch`.
+- Контракт для уже открытого Telegram не изменился: watcher по-прежнему использует managed settings до следующего запуска клиента.
 - Linux/macOS остаются portable-first beta-веткой, но теперь это уже smoke-проверяемая ветка, а не просто compile-only упаковка.
 
 ## [v0.2.0-beta.1] - 2026-04-23
 
-Beta-релиз, который переводит ProtoSwitch из чисто Windows-first прототипа в более широкую multi-platform beta-ветку: watcher теперь придерживается честной схемы `silent save + next launch` для уже открытого Telegram, TUI стал адаптивным и заметно спокойнее на узких окнах, release flow разделён на Windows installer и portable-артефакты для Windows, Linux и macOS, а GitHub Actions собирает и публикует все эти варианты автоматически.
+Beta-релиз, который переводит ProtoSwitch из чисто Windows-first прототипа в более широкую multi-platform beta-ветку: watcher теперь использует managed settings для уже открытого Telegram, TUI стал адаптивным и заметно спокойнее на узких окнах, release flow разделён на Windows installer и portable-артефакты для Windows, Linux и macOS, а GitHub Actions собирает и публикует все эти варианты автоматически.
 
 ### Added
 
@@ -74,7 +94,7 @@ Beta-релиз, который переводит ProtoSwitch из чисто W
 
 ### Changed
 
-- Фоновый watcher больше не использует live-popup как основной путь: он тихо пишет ProtoSwitch-managed proxy в `settingss` и, если Telegram уже открыт, помечает состояние как ожидающее следующего запуска клиента.
+- Фоновый watcher больше не использует live-popup как основной путь: он пишет ProtoSwitch-managed proxy в `settingss` и, если Telegram уже открыт, помечает состояние как ожидающее следующего запуска клиента.
 - Ручные `switch` и `repair` остаются `hybrid`: managed-path идёт первым, а live fallback остаётся только явным пользовательским сценарием.
 - TUI перестроен в `narrow / regular / wide` режимы, получил semantic colors, прокрутку сигналов через `PgUp/PgDn` и меньше агрессивного middle-ellipsis на статусных карточках.
 - `doctor` и plain status теперь отдельно показывают состояние источника, backend apply, путь применения, платформу и признак `waiting_for_restart`.

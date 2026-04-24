@@ -1,4 +1,4 @@
-ProtoSwitch v0.2.0-beta.3
+ProtoSwitch v0.2.0-beta.4
 
 Быстрый старт
 
@@ -32,7 +32,7 @@ ProtoSwitch v0.2.0-beta.3
 - Фоновая ротация пишет managed proxy и не должна поднимать окно Telegram.
 - При автозапуске ProtoSwitch отображается в системной области Windows.
 - Если Telegram уже открыт, ProtoSwitch обновляет managed proxy без открытия окна подтверждения.
-- Если ручной fallback недоступен, ProtoSwitch сохранит replacement proxy в settingss и честно покажет это в статусе.
+- ProtoSwitch сохраняет replacement proxy в settingss и честно показывает это в статусе.
 - Удаление программы снимает автозапуск, но не стирает пользовательские данные автоматически.
 
 Что остаётся после uninstall
