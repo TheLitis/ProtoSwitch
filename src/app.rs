@@ -712,10 +712,21 @@ pub(crate) fn current_proxy_status_text(state: &AppState) -> String {
 
 pub(crate) fn source_status_text(state: &AppState) -> String {
     if !state.source_status.trim().is_empty() {
-        return state.source_status.clone();
+        return normalize_source_status_display(&state.source_status);
     }
 
     "нет данных".to_string()
+}
+
+fn normalize_source_status_display(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.contains("первого ручного switch") {
+        return "авторотация готова к поиску proxy".to_string();
+    }
+    if lower.contains("ждём ручной apply") {
+        return raw.replace("ждём ручной apply", "ждём применения");
+    }
+    raw.to_string()
 }
 
 pub(crate) fn overall_summary_text(state: &AppState) -> String {
