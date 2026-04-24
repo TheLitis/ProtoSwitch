@@ -2313,7 +2313,10 @@ fn friendly_backend_route(route: &str) -> String {
         .strip_prefix("settingss -> ")
         .or_else(|| trimmed.strip_prefix("settingss: "))
         .unwrap_or(trimmed);
-    if settings.ends_with("settingss") || settings.contains("\\tdata\\") || settings.contains("/tdata/") {
+    if settings.ends_with("settingss")
+        || settings.contains("\\tdata\\")
+        || settings.contains("/tdata/")
+    {
         return format!("settingss: {settings}");
     }
     trimmed.to_string()

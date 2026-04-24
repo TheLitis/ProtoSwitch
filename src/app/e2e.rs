@@ -322,10 +322,7 @@ fn watcher_e2e_saves_pending_proxy_when_telegram_is_closed() {
     assert!(after_state.source_status.contains("Найден рабочий proxy"));
     assert_ne!(before, after_settings);
     assert_eq!(
-        after_settings
-            .selected
-            .as_ref()
-            .map(|proxy| proxy.port),
+        after_settings.selected.as_ref().map(|proxy| proxy.port),
         Some(live_candidate.port)
     );
 }
@@ -372,10 +369,7 @@ fn watcher_e2e_autoselects_first_proxy_without_manual_switch() {
         Some(&candidate)
     );
     assert_eq!(
-        managed_settings
-            .selected
-            .as_ref()
-            .map(|proxy| proxy.port),
+        managed_settings.selected.as_ref().map(|proxy| proxy.port),
         Some(live_candidate.port)
     );
     assert!(managed_settings.proxy_rotation_enabled);

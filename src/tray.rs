@@ -74,31 +74,28 @@ pub fn run(paths: &AppPaths) -> anyhow::Result<()> {
             Event::UserEvent(UserEvent::Menu(event)) => {
                 let paths = paths_for_events.clone();
                 if event.id == switch_item.id() {
-                    thread::spawn(move || {
-                        match app::switch_to_candidate(&paths, false) {
-                            Ok(message) => {
-                                let _ = paths.append_log(format!("tray switch: {message}"));
-                            }
-                            Err(error) => {
-                                let _ = paths.append_log(format!("tray switch failed: {error:#}"));
-                            }
+                    thread::spawn(move || match app::switch_to_candidate(&paths, false) {
+                        Ok(message) => {
+                            let _ = paths.append_log(format!("tray switch: {message}"));
+                        }
+                        Err(error) => {
+                            let _ = paths.append_log(format!("tray switch failed: {error:#}"));
                         }
                     });
                 } else if event.id == restart_item.id() {
-                    thread::spawn(move || {
-                        match app::restart_background_watcher(&paths) {
-                            Ok(message) => {
-                                let _ = paths.append_log(format!("tray restart: {message}"));
-                            }
-                            Err(error) => {
-                                let _ = paths.append_log(format!("tray restart failed: {error:#}"));
-                            }
+                    thread::spawn(move || match app::restart_background_watcher(&paths) {
+                        Ok(message) => {
+                            let _ = paths.append_log(format!("tray restart: {message}"));
+                        }
+                        Err(error) => {
+                            let _ = paths.append_log(format!("tray restart failed: {error:#}"));
                         }
                     });
                 } else if event.id == stop_item.id() {
                     match app::stop_all_protoswitch_processes(&paths) {
                         Ok(stopped) => {
-                            let _ = paths.append_log(format!("tray stopped ProtoSwitch: {stopped}"));
+                            let _ =
+                                paths.append_log(format!("tray stopped ProtoSwitch: {stopped}"));
                         }
                         Err(error) => {
                             let _ = paths.append_log(format!("tray stop failed: {error:#}"));
