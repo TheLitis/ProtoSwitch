@@ -103,6 +103,26 @@ impl MtProtoProvider {
     }
 
     pub fn fetch_html(&self, url: &str) -> anyhow::Result<String> {
+        let attempts = self.config.fetch_attempts.max(1);
+        let retry_delay = Duration::from_millis(self.config.fetch_retry_delay_ms);
+        let mut last_error = None;
+
+        for attempt in 0..attempts {
+            match self.fetch_html_once(url) {
+                Ok(body) => return Ok(body),
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt + 1 < attempts {
+                        thread::sleep(retry_delay);
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("Источник proxy не вернул ответ")))
+    }
+
+    fn fetch_html_once(&self, url: &str) -> anyhow::Result<String> {
         let response = self
             .client
             .get(url)
@@ -137,7 +157,7 @@ impl MtProtoProvider {
         let mut last_error = None;
 
         for attempt in 0..attempts {
-            let html = match self.fetch_html(&source.url) {
+            let html = match self.fetch_html_once(&source.url) {
                 Ok(html) => html,
                 Err(error) => {
                     last_error = Some(error);

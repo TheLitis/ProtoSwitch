@@ -161,8 +161,8 @@ impl WatcherHarness {
             .first()
             .map(|source| source.url.clone())
             .unwrap_or_default();
-        config.provider.fetch_attempts = 1;
-        config.provider.fetch_retry_delay_ms = 1;
+        config.provider.fetch_attempts = 3;
+        config.provider.fetch_retry_delay_ms = 25;
         config.provider.enable_socks5_fallback = true;
         config.watcher.failure_threshold = 1;
         config.watcher.connect_timeout_secs = 1;
