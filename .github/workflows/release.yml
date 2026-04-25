@@ -6,9 +6,6 @@ on:
       - "v*"
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   metadata:
     runs-on: ubuntu-24.04
@@ -60,7 +57,7 @@ jobs:
       - name: Smoke installer
         shell: pwsh
         run: ./scripts/smoke-installer.ps1 -Version ${{ needs.metadata.outputs.version }} -Mode CurrentUser
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-artifacts
           path: dist/${{ needs.metadata.outputs.version }}/*
@@ -126,7 +123,7 @@ jobs:
             --version "${{ needs.metadata.outputs.version }}" \
             --platform linux \
             --arch "${{ matrix.arch }}"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}-artifacts
           path: dist/${{ needs.metadata.outputs.version }}/*
@@ -174,7 +171,7 @@ jobs:
             --version "${{ needs.metadata.outputs.version }}" \
             --platform macos \
             --arch "${{ matrix.arch }}"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}-artifacts
           path: dist/${{ needs.metadata.outputs.version }}/*
@@ -188,7 +185,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: release-artifacts
       - name: Assemble release directory
