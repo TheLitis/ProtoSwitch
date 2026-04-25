@@ -1,6 +1,6 @@
 ﻿# ProtoSwitch
 
-**ProtoSwitch v0.2.0-beta.4** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и записывает managed proxy в настройки Telegram без popup и без focus stealing.
+**ProtoSwitch v0.2.0-beta.5** — terminal-first утилита для Telegram Desktop, которая следит за состоянием proxy, подбирает замену из бесплатных MTProto/SOCKS5-источников и записывает managed proxy в настройки Telegram без popup и без focus stealing.
 
 ## Что Есть Сейчас
 
@@ -114,7 +114,7 @@ data_dir = ""
 
 - `managed` — только запись в `settingss`;
 - `hybrid` — managed path по умолчанию без `tg://`-диалога;
-- `manual` — legacy-режим в конфиге, в beta.4 пользовательские команды всё равно не открывают окно подтверждения Telegram.
+- `manual` — legacy-режим в конфиге, в beta.5 пользовательские команды всё равно не открывают окно подтверждения Telegram.
 
 Каталоги данных:
 

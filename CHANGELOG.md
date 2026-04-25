@@ -2,6 +2,22 @@
 
 Все заметные изменения проекта ProtoSwitch будут отражаться в этом файле.
 
+## [v0.2.0-beta.5] - 2026-04-25
+
+Beta-релиз для доводки поставки после `v0.2.0-beta.4`: installer теперь открывает пользовательский сценарий через системный индикатор по умолчанию, а репозиторий получил отдельный push/PR CI, который проверяет Windows, Linux и macOS до релизной сборки.
+
+### Changed
+
+- Ярлык `ProtoSwitch` в меню Пуск, desktop shortcut и финальный запуск installer теперь стартуют `protoswitch tray`, чтобы пользователь сразу видел индикатор в системной области, а не отдельную консоль.
+- Для продвинутого сценария в меню Пуск оставлен отдельный `ProtoSwitch Console`.
+- Windows installer smoke теперь проверяет, что основной ярлык действительно запускает tray-mode.
+- Release workflow переведён на актуальные `actions/checkout@v5`, `actions/upload-artifact@v5` и `actions/download-artifact@v5`, чтобы убрать предупреждения о старом Node.js runtime.
+- Добавлен отдельный CI workflow на push и pull request: форматирование, тесты и `clippy -D warnings` проходят на Windows, Linux и macOS.
+
+### Fixed
+
+- Убрано дублирование `allow(dead_code)`, которое ломало non-Windows `clippy` при строгих предупреждениях.
+
 ## [v0.2.0-beta.4] - 2026-04-24
 
 Beta-релиз для пользовательского фонового сценария: ProtoSwitch получил системный индикатор, автозапуск теперь поднимает tray-mode, а watcher при открытом Telegram продолжает managed rotation без popup, без захвата фокуса и без состояния `waiting_for_restart`.
