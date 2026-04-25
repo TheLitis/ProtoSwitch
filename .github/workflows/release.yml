@@ -6,9 +6,6 @@ on:
       - "v*"
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   metadata:
     runs-on: ubuntu-24.04
@@ -17,7 +14,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - id: meta
         shell: bash
@@ -43,7 +40,7 @@ jobs:
     env:
       RUSTFLAGS: -Dwarnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Inno Setup
         shell: pwsh
@@ -60,7 +57,7 @@ jobs:
       - name: Smoke installer
         shell: pwsh
         run: ./scripts/smoke-installer.ps1 -Version ${{ needs.metadata.outputs.version }} -Mode CurrentUser
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: windows-artifacts
           path: dist/${{ needs.metadata.outputs.version }}/*
@@ -71,7 +68,7 @@ jobs:
     env:
       RUSTFLAGS: -Dwarnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Run deterministic watcher e2e
         shell: pwsh
@@ -91,7 +88,7 @@ jobs:
     env:
       RUSTFLAGS: -Dwarnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Install tray dependencies
         shell: bash
@@ -126,7 +123,7 @@ jobs:
             --version "${{ needs.metadata.outputs.version }}" \
             --platform linux \
             --arch "${{ matrix.arch }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: linux-${{ matrix.arch }}-artifacts
           path: dist/${{ needs.metadata.outputs.version }}/*
@@ -145,7 +142,7 @@ jobs:
     env:
       RUSTFLAGS: -Dwarnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Test
         if: matrix.arch == 'x64'
@@ -174,7 +171,7 @@ jobs:
             --version "${{ needs.metadata.outputs.version }}" \
             --platform macos \
             --arch "${{ matrix.arch }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: macos-${{ matrix.arch }}-artifacts
           path: dist/${{ needs.metadata.outputs.version }}/*
@@ -187,8 +184,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
         with:
           path: release-artifacts
       - name: Assemble release directory
