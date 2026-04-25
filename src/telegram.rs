@@ -27,7 +27,6 @@ use winreg::enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
-#[cfg_attr(not(windows), allow(dead_code))]
 pub enum ManagedProxyStatus {
     Available(String),
     Checking(String),
