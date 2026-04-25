@@ -206,10 +206,36 @@ function Invoke-External {
     $output = & $FilePath @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         $rendered = ($output | Out-String).Trim()
-        throw "$FilePath failed with exit code $LASTEXITCODE. $rendered"
+        throw "$FilePath $($Arguments -join ' ') failed with exit code $LASTEXITCODE. $rendered"
     }
 
     return ($output | Out-String)
+}
+
+function Disable-LiveProviderSources {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath
+    )
+
+    if ($DryRun) {
+        Write-Host "[dry-run] disable live provider sources in $ConfigPath"
+        return
+    }
+
+    $lines = [System.IO.File]::ReadAllLines($ConfigPath, [System.Text.Encoding]::UTF8)
+    $insideSource = $false
+    for ($index = 0; $index -lt $lines.Length; $index++) {
+        $line = $lines[$index].Trim()
+        if ($line -eq '[[provider.sources]]') {
+            $insideSource = $true
+        } elseif ($line.StartsWith('[')) {
+            $insideSource = $false
+        } elseif ($insideSource -and $line -eq 'enabled = true') {
+            $lines[$index] = 'enabled = false'
+        }
+    }
+    [System.IO.File]::WriteAllLines($ConfigPath, $lines, [System.Text.UTF8Encoding]::new($false))
 }
 
 function Assert-ContainsText {
@@ -331,6 +357,7 @@ function Invoke-SmokeRun {
     Write-Host "Installer smoke: $Scope"
     Invoke-Process -FilePath $InstallerPath -Arguments $installerArgs
     Assert-MainShortcutLaunchesTray
+    Disable-LiveProviderSources -ConfigPath (Join-Path $configDir 'config\config.toml')
 
     foreach ($path in @(
         $exePath,

@@ -2,6 +2,21 @@
 
 Все заметные изменения проекта ProtoSwitch будут отражаться в этом файле.
 
+## [v0.2.0-beta.6] - 2026-04-25
+
+Hotfix-beta после `v0.2.0-beta.5`: закрывает flaky Windows e2e на локальном provider fixture и убирает предупреждения GitHub Actions про Node.js runtime.
+
+### Changed
+
+- Link-list и SOCKS provider fetch теперь используют общий retry-контур `fetch_attempts` / `fetch_retry_delay_ms`, поэтому кратковременный сетевой сбой не срывает источник с первой попытки.
+- Детерминированный watcher e2e стал устойчивее к race при старте локального HTTP fixture на Windows CI.
+- Windows installer smoke больше не зависит от live `mtproto.ru`: после установки он отключает публичные provider sources во временном конфиге.
+- CI и release workflows явно включают `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`.
+
+### Fixed
+
+- Исправлен красный `main` CI, где Windows test иногда падал на `watcher_e2e_writes_managed_settings_when_telegram_is_open` из-за слишком раннего запроса к fixture server.
+
 ## [v0.2.0-beta.5] - 2026-04-25
 
 Beta-релиз для доводки поставки после `v0.2.0-beta.4`: installer теперь открывает пользовательский сценарий через системный индикатор по умолчанию, а репозиторий получил отдельный push/PR CI, который проверяет Windows, Linux и macOS до релизной сборки.

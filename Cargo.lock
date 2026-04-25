@@ -2174,7 +2174,7 @@ dependencies = [
 
 [[package]]
 name = "protoswitch"
-version = "0.2.0-beta.5"
+version = "0.2.0-beta.6"
 dependencies = [
  "aes",
  "anyhow",
