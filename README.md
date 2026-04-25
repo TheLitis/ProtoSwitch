@@ -62,25 +62,26 @@ flowchart TD
 ### Windows
 
 1. Установите `ProtoSwitch-Setup-x64.exe` или распакуйте `protoswitch-portable-win-x64.zip`.
-2. Запустите `protoswitch.exe` без аргументов.
-3. Проверьте состояние:
+2. Если используете portable, сначала выполните `protoswitch.exe init --non-interactive --no-autostart`.
+3. Запустите ProtoSwitch из меню Пуск или командой `protoswitch.exe tray`, чтобы появился индикатор в системной области.
+4. Проверьте состояние:
    `protoswitch status --plain`
    `protoswitch doctor`
-4. При необходимости включите автозапуск:
+5. При необходимости включите автозапуск:
    `protoswitch autostart install`
-5. Для ручной смены proxy:
+6. Для ручной смены proxy:
    `protoswitch switch`
 
 ### Linux / macOS
 
 1. Распакуйте portable-архив под свою архитектуру.
-2. Запустите:
+2. Инициализируйте конфиг:
    `./protoswitch init --non-interactive --no-autostart`
-3. Проверьте состояние:
+3. Запустите индикатор:
+   `./protoswitch tray`
+4. Проверьте состояние:
    `./protoswitch status --plain`
    `./protoswitch doctor`
-4. Для фоновой работы:
-   `./protoswitch tray`
 
 ## Основные Команды
 

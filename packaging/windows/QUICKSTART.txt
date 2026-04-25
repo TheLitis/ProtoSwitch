@@ -3,7 +3,7 @@ ProtoSwitch v0.2.0-beta.4
 Быстрый старт
 
 1. Installer уже выполняет первичную инициализацию.
-2. Запустите ProtoSwitch из меню Пуск или через protoswitch.exe.
+2. Запустите ProtoSwitch из меню Пуск или с рабочего стола: откроется индикатор в системной области.
 3. Проверьте состояние:
    protoswitch.exe status --plain
    protoswitch.exe doctor
@@ -23,7 +23,8 @@ ProtoSwitch v0.2.0-beta.4
 
 Пункты в меню Пуск
 
-- ProtoSwitch
+- ProtoSwitch (индикатор)
+- ProtoSwitch Console
 - Починить ProtoSwitch
 - Удалить ProtoSwitch
 

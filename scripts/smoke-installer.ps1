@@ -68,6 +68,41 @@ function Test-ScheduledTask {
     return $process.ExitCode -eq 0
 }
 
+function Get-ProtoSwitchShortcutCandidates {
+    $programRoots = @(
+        (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
+        (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs')
+    )
+
+    $names = @(
+        'ProtoSwitch\ProtoSwitch.lnk',
+        'ProtoSwitch.lnk'
+    )
+
+    foreach ($root in $programRoots) {
+        foreach ($name in $names) {
+            Join-Path $root $name
+        }
+    }
+}
+
+function Assert-MainShortcutLaunchesTray {
+    if ($DryRun) {
+        return
+    }
+
+    $shortcutPath = Get-ProtoSwitchShortcutCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $shortcutPath) {
+        throw 'Installer smoke expected ProtoSwitch Start Menu shortcut to exist.'
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    if ($shortcut.Arguments -ne 'tray') {
+        throw "ProtoSwitch Start Menu shortcut should launch tray, got arguments '$($shortcut.Arguments)'."
+    }
+}
+
 function Assert-CleanEnvironment {
     $protoswitchProcesses = @(Get-Process protoswitch -ErrorAction SilentlyContinue)
     if ($protoswitchProcesses.Count -gt 0) {
@@ -295,6 +330,7 @@ function Invoke-SmokeRun {
 
     Write-Host "Installer smoke: $Scope"
     Invoke-Process -FilePath $InstallerPath -Arguments $installerArgs
+    Assert-MainShortcutLaunchesTray
 
     foreach ($path in @(
         $exePath,

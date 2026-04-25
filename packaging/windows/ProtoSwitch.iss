@@ -52,15 +52,16 @@ Source: "{#RepoRoot}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\packaging\windows\QUICKSTART.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\ProtoSwitch"; Filename: "{app}\protoswitch.exe"; IconFilename: "{app}\protoswitch.exe"
+Name: "{autoprograms}\ProtoSwitch"; Filename: "{app}\protoswitch.exe"; Parameters: "tray"; IconFilename: "{app}\protoswitch.exe"
+Name: "{autoprograms}\ProtoSwitch Console"; Filename: "{app}\protoswitch.exe"; IconFilename: "{app}\protoswitch.exe"
 Name: "{autoprograms}\Починить ProtoSwitch"; Filename: "{app}\protoswitch.exe"; Parameters: "repair"; IconFilename: "{app}\protoswitch.exe"
 Name: "{autoprograms}\Удалить ProtoSwitch"; Filename: "{uninstallexe}"
 
 [Run]
 Filename: "{app}\protoswitch.exe"; Parameters: "init --non-interactive --no-autostart"; StatusMsg: "Настраивается ProtoSwitch..."; Flags: runhidden waituntilterminated runasoriginaluser
 Filename: "{app}\protoswitch.exe"; Parameters: "autostart install"; StatusMsg: "Включается автозапуск ProtoSwitch..."; Flags: runhidden waituntilterminated runasoriginaluser; Check: ShouldEnableAutostart
-Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -Command ""$ws = New-Object -ComObject WScript.Shell; $shortcut = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\ProtoSwitch.lnk'); $shortcut.TargetPath = '{app}\protoswitch.exe'; $shortcut.WorkingDirectory = '{app}'; $shortcut.IconLocation = '{app}\protoswitch.exe,0'; $shortcut.Save()"""; Description: "Добавить ярлык ProtoSwitch на рабочий стол"; Flags: postinstall runhidden runasoriginaluser unchecked skipifsilent
-Filename: "{app}\protoswitch.exe"; Description: "Запустить ProtoSwitch"; Flags: nowait postinstall runasoriginaluser skipifsilent
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -WindowStyle Hidden -Command ""$ws = New-Object -ComObject WScript.Shell; $shortcut = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\ProtoSwitch.lnk'); $shortcut.TargetPath = '{app}\protoswitch.exe'; $shortcut.Arguments = 'tray'; $shortcut.WorkingDirectory = '{app}'; $shortcut.IconLocation = '{app}\protoswitch.exe,0'; $shortcut.Save()"""; Description: "Добавить ярлык ProtoSwitch на рабочий стол"; Flags: postinstall runhidden runasoriginaluser unchecked skipifsilent
+Filename: "{app}\protoswitch.exe"; Parameters: "tray"; Description: "Запустить ProtoSwitch в фоне"; Flags: nowait postinstall runasoriginaluser skipifsilent
 
 [UninstallRun]
 Filename: "{app}\protoswitch.exe"; Parameters: "autostart remove"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "ProtoSwitchRemoveAutostart"

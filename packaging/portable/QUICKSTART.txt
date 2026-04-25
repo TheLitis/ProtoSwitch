@@ -2,11 +2,11 @@ ProtoSwitch portable
 
 Быстрый старт
 
-1. Запустите бинарь ProtoSwitch из этой папки.
-   Windows: protoswitch.exe
-   Linux/macOS: ./protoswitch
-2. Создайте или обновите конфиг:
+1. Создайте или обновите конфиг:
    protoswitch init --non-interactive --no-autostart
+2. Запустите фоновый индикатор ProtoSwitch из этой папки.
+   Windows: protoswitch.exe tray
+   Linux/macOS: ./protoswitch tray
 3. Проверьте состояние:
    protoswitch status --plain
    protoswitch doctor
