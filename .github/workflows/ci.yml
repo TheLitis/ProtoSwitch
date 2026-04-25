@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    env:
+      RUSTFLAGS: -Dwarnings
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        shell: pwsh
+        run: cargo fmt --check
+      - name: Test
+        shell: pwsh
+        run: cargo test --locked
+      - name: Clippy
+        shell: pwsh
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: -Dwarnings
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install tray dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+      - name: Test
+        shell: bash
+        run: cargo test --locked
+      - name: Clippy
+        shell: bash
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  macos:
+    runs-on: macos-15
+    env:
+      RUSTFLAGS: -Dwarnings
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Test
+        shell: bash
+        run: cargo test --locked
+      - name: Clippy
+        shell: bash
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
